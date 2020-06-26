@@ -17,23 +17,20 @@
 set -e
 set -o pipefail
 
-KUBERNETES_VERSION=v1.17.3
+KUBERNETES_VERSION=v1.18.1
 KUBE_STATE_METRICS_LOG_DIR=./log
 KUBE_STATE_METRICS_IMAGE_NAME='quay.io/coreos/kube-state-metrics'
-PROMETHEUS_VERSION=2.12.0
 E2E_SETUP_MINIKUBE=${E2E_SETUP_MINIKUBE:-}
 E2E_SETUP_KUBECTL=${E2E_SETUP_KUBECTL:-}
-E2E_SETUP_PROMTOOL=${E2E_SETUP_PROMTOOL:-}
-MINIKUBE_VERSION=v1.3.1
+MINIKUBE_VERSION=v1.8.1
 MINIKUBE_DRIVER=${MINIKUBE_DRIVER:-virtualbox}
 SUDO=${SUDO:-}
+MINIKUBE_PROFILE=${MINIKUBE_PROFILE:-ksm-e2e}
 
 OS=$(uname -s | awk '{print tolower($0)}')
 OS=${OS:-linux}
 
 EXCLUDED_RESOURCE_REGEX="verticalpodautoscaler"
-
-mkdir -p ${KUBE_STATE_METRICS_LOG_DIR}
 
 function finish() {
     echo "calling cleanup function"
@@ -55,14 +52,6 @@ function setup_kubectl() {
         && ${SUDO} mv kubectl /usr/local/bin/
 }
 
-function setup_promtool() {
-    wget -q -O /tmp/prometheus.tar.gz https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}."${OS}"-amd64.tar.gz
-    tar zxfv /tmp/prometheus.tar.gz -C /tmp/ prometheus-${PROMETHEUS_VERSION}."${OS}"-amd64/promtool
-    ${SUDO} mv /tmp/prometheus-${PROMETHEUS_VERSION}."${OS}"-amd64/promtool /usr/local/bin/
-    rmdir /tmp/prometheus-${PROMETHEUS_VERSION}."${OS}"-amd64
-    rm /tmp/prometheus.tar.gz
-}
-
 [[ -n "${E2E_SETUP_MINIKUBE}" ]] && setup_minikube
 
 minikube version
@@ -77,9 +66,17 @@ mkdir "${HOME}"/.kube || true
 touch "${HOME}"/.kube/config
 
 export KUBECONFIG=$HOME/.kube/config
-${SUDO} minikube start --vm-driver="${MINIKUBE_DRIVER}" --kubernetes-version=${KUBERNETES_VERSION} --logtostderr
 
-minikube update-context
+# use profile default value if driver is none
+MINIKUBE_PROFILE_ARG="minikube"
+if [[ "$MINIKUBE_DRIVER" != "none" ]]; then
+    MINIKUBE_PROFILE_ARG="${MINIKUBE_PROFILE}"
+fi
+export MINIKUBE_PROFILE_ARG
+
+${SUDO} minikube start --vm-driver="${MINIKUBE_DRIVER}" --profile="${MINIKUBE_PROFILE_ARG}" --kubernetes-version=${KUBERNETES_VERSION} --logtostderr
+
+minikube update-context --profile="${MINIKUBE_PROFILE_ARG}"
 
 set +e
 
@@ -98,7 +95,7 @@ for _ in {1..90}; do # timeout for 3 minutes
 done
 
 if [[ ${is_kube_running} == "false" ]]; then
-   minikube logs
+   minikube logs --profile="${MINIKUBE_PROFILE_ARG}"
    echo "Kubernetes does not start within 3 minutes"
    exit 1
 fi
@@ -107,8 +104,11 @@ set -e
 
 kubectl version
 
+# Build binary
+make build
+
 # ensure that we build docker image in minikube
-[[ "$MINIKUBE_DRIVER" != "none" ]] && eval "$(minikube docker-env)"
+[[ "$MINIKUBE_DRIVER" != "none" ]] && eval "$(minikube docker-env --profile="${MINIKUBE_PROFILE_ARG}")" && export DOCKER_CLI='docker'
 
 # query kube-state-metrics image tag
 make container
@@ -165,16 +165,15 @@ set -e
 echo "kube-state-metrics is up and running"
 
 echo "start e2e test for kube-state-metrics"
-KSMURL='http://localhost:8001/api/v1/namespaces/kube-system/services/kube-state-metrics:http-metrics/proxy'
-go test -v ./tests/e2e/ --ksmurl=${KSMURL}
+KSM_HTTP_METRICS_URL='http://localhost:8001/api/v1/namespaces/kube-system/services/kube-state-metrics:http-metrics/proxy'
+KSM_TELEMETRY_URL='http://localhost:8001/api/v1/namespaces/kube-system/services/kube-state-metrics:telemetry/proxy'
+go test -v ./tests/e2e/ --ksm-http-metrics-url=${KSM_HTTP_METRICS_URL} --ksm-telemetry-url=${KSM_TELEMETRY_URL}
+
+mkdir -p ${KUBE_STATE_METRICS_LOG_DIR}
 
 # TODO: re-implement the following test cases in Go with the goal of removing this file.
 echo "access kube-state-metrics metrics endpoint"
 curl -s "http://localhost:8001/api/v1/namespaces/kube-system/services/kube-state-metrics:http-metrics/proxy/metrics" >${KUBE_STATE_METRICS_LOG_DIR}/metrics
-
-echo "check metrics format with promtool"
-[[ -n "${E2E_SETUP_PROMTOOL}" ]] && setup_promtool
-< ${KUBE_STATE_METRICS_LOG_DIR}/metrics promtool check metrics
 
 resources=$(find internal/store/ -maxdepth 1 -name "*.go" -not -name "*_test.go" -not -name "builder.go" -not -name "testutils.go" -not -name "utils.go" -print0 | xargs -0 -n1 basename | awk -F. '{print $1}'| grep -v "$EXCLUDED_RESOURCE_REGEX")
 echo "available resources: $resources"

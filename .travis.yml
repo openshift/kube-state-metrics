@@ -3,7 +3,7 @@ dist: xenial
 language: go
 
 go:
-    - "1.13.x"
+    - "1.14.x"
 
 services:
   - docker
@@ -17,12 +17,14 @@ env:
   global:
       - E2E_SETUP_MINIKUBE=yes
       - E2E_SETUP_KUBECTL=yes
-      - E2E_SETUP_PROMTOOL=yes
       - MINIKUBE_DRIVER=none
       - SUDO=sudo
 
 before_script:
 - make install-tools
+
+before_install:
+- sudo apt-get -qq -y install conntrack
 
 install:
 - mkdir -p $HOME/gopath/src/k8s.io

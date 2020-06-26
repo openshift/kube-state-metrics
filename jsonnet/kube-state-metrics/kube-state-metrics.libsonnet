@@ -9,7 +9,7 @@ local k = import 'ksonnet/ksonnet.beta.4/k.libsonnet';
 
   commonLabels:: {
     'app.kubernetes.io/name': 'kube-state-metrics',
-    'app.kubernetes.io/version': 'v' + ksm.version,
+    'app.kubernetes.io/version': ksm.version,
   },
 
   podLabels:: {
@@ -135,6 +135,13 @@ local k = import 'ksonnet/ksonnet.beta.4/k.libsonnet';
       rulesType.withApiGroups(['networking.k8s.io']) +
       rulesType.withResources([
         'networkpolicies',
+      ]) +
+      rulesType.withVerbs(['list', 'watch']),
+
+      rulesType.new() +
+      rulesType.withApiGroups(['coordination.k8s.io']) +
+      rulesType.withResources([
+        'leases',
       ]) +
       rulesType.withVerbs(['list', 'watch']),
     ];

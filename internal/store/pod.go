@@ -31,12 +31,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-const nodeUnreachablePodReason = "NodeLost"
-
 var (
 	descPodLabelsDefaultLabels = []string{"namespace", "pod"}
 	containerWaitingReasons    = []string{"ContainerCreating", "CrashLoopBackOff", "CreateContainerConfigError", "ErrImagePull", "ImagePullBackOff", "CreateContainerError", "InvalidImageName"}
 	containerTerminatedReasons = []string{"OOMKilled", "Completed", "Error", "ContainerCannotRun", "DeadlineExceeded", "Evicted"}
+	podStatusReasons           = []string{"NodeLost", "Evicted", "UnexpectedAdmissionError"}
 
 	podMetricFamilies = []generator.FamilyGenerator{
 		{
@@ -58,8 +57,8 @@ var (
 
 				m := metric.Metric{
 
-					LabelKeys:   []string{"host_ip", "pod_ip", "uid", "node", "created_by_kind", "created_by_name", "priority_class"},
-					LabelValues: []string{p.Status.HostIP, p.Status.PodIP, string(p.UID), p.Spec.NodeName, createdByKind, createdByName, p.Spec.PriorityClassName},
+					LabelKeys:   []string{"host_ip", "pod_ip", "uid", "node", "created_by_kind", "created_by_name", "priority_class", "host_network"},
+					LabelValues: []string{p.Status.HostIP, p.Status.PodIP, string(p.UID), p.Spec.NodeName, createdByKind, createdByName, p.Spec.PriorityClassName, strconv.FormatBool(p.Spec.HostNetwork)},
 					Value:       1,
 				}
 
@@ -198,6 +197,26 @@ var (
 			}),
 		},
 		{
+			Name: "kube_pod_deletion_timestamp",
+			Type: metric.Gauge,
+			Help: "Unix deletion timestamp",
+			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
+				ms := []*metric.Metric{}
+
+				if p.DeletionTimestamp != nil && !p.DeletionTimestamp.IsZero() {
+					ms = append(ms, &metric.Metric{
+						LabelKeys:   []string{},
+						LabelValues: []string{},
+						Value:       float64(p.DeletionTimestamp.Unix()),
+					})
+				}
+
+				return &metric.Family{
+					Metrics: ms,
+				}
+			}),
+		},
+		{
 			Name: "kube_pod_restart_policy",
 			Type: metric.Gauge,
 			Help: "Describes the restart policy in use by this pod.",
@@ -282,10 +301,8 @@ var (
 					{phase == v1.PodPending, string(v1.PodPending)},
 					{phase == v1.PodSucceeded, string(v1.PodSucceeded)},
 					{phase == v1.PodFailed, string(v1.PodFailed)},
-					// This logic is directly copied from: https://github.com/kubernetes/kubernetes/blob/d39bfa0d138368bbe72b0eaf434501dcb4ec9908/pkg/printers/internalversion/printers.go#L597-L601
-					// For more info, please go to: https://github.com/kubernetes/kube-state-metrics/issues/410
-					{phase == v1.PodRunning && !(p.DeletionTimestamp != nil && p.Status.Reason == nodeUnreachablePodReason), string(v1.PodRunning)},
-					{phase == v1.PodUnknown || (p.DeletionTimestamp != nil && p.Status.Reason == nodeUnreachablePodReason), string(v1.PodUnknown)},
+					{phase == v1.PodUnknown, string(v1.PodUnknown)},
+					{phase == v1.PodRunning, string(v1.PodRunning)},
 				}
 
 				ms := make([]*metric.Metric, len(phases))
@@ -347,6 +364,30 @@ var (
 							ms = append(ms, metric)
 						}
 					}
+				}
+
+				return &metric.Family{
+					Metrics: ms,
+				}
+			}),
+		},
+		{
+			Name: "kube_pod_status_reason",
+			Type: metric.Gauge,
+			Help: "The pod status reasons",
+			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
+				ms := []*metric.Metric{}
+
+				for _, reason := range podStatusReasons {
+					metric := &metric.Metric{}
+					metric.LabelKeys = []string{"reason"}
+					metric.LabelValues = []string{reason}
+					if p.Status.Reason == reason {
+						metric.Value = boolFloat64(true)
+					} else {
+						metric.Value = boolFloat64(false)
+					}
+					ms = append(ms, metric)
 				}
 
 				return &metric.Family{
@@ -742,7 +783,7 @@ var (
 						switch resourceName {
 						case v1.ResourceCPU:
 							ms = append(ms, &metric.Metric{
-								LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
 								Value:       float64(val.MilliValue()) / 1000,
 							})
 						case v1.ResourceStorage:
@@ -751,25 +792,25 @@ var (
 							fallthrough
 						case v1.ResourceMemory:
 							ms = append(ms, &metric.Metric{
-								LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 								Value:       float64(val.Value()),
 							})
 						default:
 							if isHugePageResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 									Value:       float64(val.Value()),
 								})
 							}
 							if isAttachableVolumeResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 									Value:       float64(val.Value()),
 								})
 							}
 							if isExtendedResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitInteger)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitInteger)},
 									Value:       float64(val.Value()),
 								})
 							}
@@ -778,7 +819,7 @@ var (
 				}
 
 				for _, metric := range ms {
-					metric.LabelKeys = []string{"container", "node", "resource", "unit"}
+					metric.LabelKeys = []string{"container", "resource", "unit"}
 				}
 
 				return &metric.Family{
@@ -801,7 +842,7 @@ var (
 						case v1.ResourceCPU:
 							ms = append(ms, &metric.Metric{
 								Value:       float64(val.MilliValue()) / 1000,
-								LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
 							})
 						case v1.ResourceStorage:
 							fallthrough
@@ -809,26 +850,26 @@ var (
 							fallthrough
 						case v1.ResourceMemory:
 							ms = append(ms, &metric.Metric{
-								LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 								Value:       float64(val.Value()),
 							})
 						default:
 							if isHugePageResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 									Value:       float64(val.Value()),
 								})
 							}
 							if isAttachableVolumeResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
 									Value:       float64(val.Value()),
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 								})
 							}
 							if isExtendedResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
 									Value:       float64(val.Value()),
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitInteger)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitInteger)},
 								})
 							}
 						}
@@ -836,7 +877,65 @@ var (
 				}
 
 				for _, metric := range ms {
-					metric.LabelKeys = []string{"container", "node", "resource", "unit"}
+					metric.LabelKeys = []string{"container", "resource", "unit"}
+				}
+
+				return &metric.Family{
+					Metrics: ms,
+				}
+			}),
+		},
+		{
+			Name: "kube_pod_init_container_resource_requests",
+			Type: metric.Gauge,
+			Help: "The number of requested resources by the init container.",
+			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
+				ms := []*metric.Metric{}
+
+				for _, c := range p.Spec.InitContainers {
+					req := c.Resources.Requests
+
+					for resourceName, val := range req {
+						switch resourceName {
+						case v1.ResourceCPU:
+							ms = append(ms, &metric.Metric{
+								Value:       float64(val.MilliValue()) / 1000,
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
+							})
+						case v1.ResourceStorage:
+							fallthrough
+						case v1.ResourceEphemeralStorage:
+							fallthrough
+						case v1.ResourceMemory:
+							ms = append(ms, &metric.Metric{
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+								Value:       float64(val.Value()),
+							})
+						default:
+							if isHugePageResourceName(resourceName) {
+								ms = append(ms, &metric.Metric{
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+									Value:       float64(val.Value()),
+								})
+							}
+							if isAttachableVolumeResourceName(resourceName) {
+								ms = append(ms, &metric.Metric{
+									Value:       float64(val.Value()),
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+								})
+							}
+							if isExtendedResourceName(resourceName) {
+								ms = append(ms, &metric.Metric{
+									Value:       float64(val.Value()),
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitInteger)},
+								})
+							}
+						}
+					}
+				}
+
+				for _, metric := range ms {
+					metric.LabelKeys = []string{"container", "resource", "unit"}
 				}
 
 				return &metric.Family{
@@ -859,7 +958,7 @@ var (
 						case v1.ResourceCPU:
 							ms = append(ms, &metric.Metric{
 								Value:       float64(val.MilliValue()) / 1000,
-								LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
 							})
 						case v1.ResourceStorage:
 							fallthrough
@@ -867,26 +966,26 @@ var (
 							fallthrough
 						case v1.ResourceMemory:
 							ms = append(ms, &metric.Metric{
-								LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+								LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 								Value:       float64(val.Value()),
 							})
 						default:
 							if isHugePageResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 									Value:       float64(val.Value()),
 								})
 							}
 							if isAttachableVolumeResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
 									Value:       float64(val.Value()),
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
 								})
 							}
 							if isExtendedResourceName(resourceName) {
 								ms = append(ms, &metric.Metric{
 									Value:       float64(val.Value()),
-									LabelValues: []string{c.Name, p.Spec.NodeName, sanitizeLabelName(string(resourceName)), string(constant.UnitInteger)},
+									LabelValues: []string{c.Name, sanitizeLabelName(string(resourceName)), string(constant.UnitInteger)},
 								})
 							}
 						}
@@ -894,100 +993,7 @@ var (
 				}
 
 				for _, metric := range ms {
-					metric.LabelKeys = []string{"container", "node", "resource", "unit"}
-				}
-
-				return &metric.Family{
-					Metrics: ms,
-				}
-			}),
-		},
-		{
-			Name: "kube_pod_container_resource_requests_cpu_cores",
-			Type: metric.Gauge,
-			Help: "The number of requested cpu cores by a container.",
-			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
-				ms := []*metric.Metric{}
-
-				for _, c := range p.Spec.Containers {
-					req := c.Resources.Requests
-					if cpu, ok := req[v1.ResourceCPU]; ok {
-						ms = append(ms, &metric.Metric{
-							LabelKeys:   []string{"container", "node"},
-							LabelValues: []string{c.Name, p.Spec.NodeName},
-							Value:       float64(cpu.MilliValue()) / 1000,
-						})
-					}
-				}
-
-				return &metric.Family{
-					Metrics: ms,
-				}
-			}),
-		},
-		{
-			Name: "kube_pod_container_resource_requests_memory_bytes",
-			Type: metric.Gauge,
-			Help: "The number of requested memory bytes by a container.",
-			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
-				ms := []*metric.Metric{}
-
-				for _, c := range p.Spec.Containers {
-					req := c.Resources.Requests
-					if mem, ok := req[v1.ResourceMemory]; ok {
-						ms = append(ms, &metric.Metric{
-							LabelKeys:   []string{"container", "node"},
-							LabelValues: []string{c.Name, p.Spec.NodeName},
-							Value:       float64(mem.Value()),
-						})
-					}
-				}
-
-				return &metric.Family{
-					Metrics: ms,
-				}
-			}),
-		},
-		{
-			Name: "kube_pod_container_resource_limits_cpu_cores",
-			Type: metric.Gauge,
-			Help: "The limit on cpu cores to be used by a container.",
-			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
-				ms := []*metric.Metric{}
-
-				for _, c := range p.Spec.Containers {
-					lim := c.Resources.Limits
-					if cpu, ok := lim[v1.ResourceCPU]; ok {
-						ms = append(ms, &metric.Metric{
-							LabelKeys:   []string{"container", "node"},
-							LabelValues: []string{c.Name, p.Spec.NodeName},
-							Value:       float64(cpu.MilliValue()) / 1000,
-						})
-					}
-				}
-
-				return &metric.Family{
-					Metrics: ms,
-				}
-			}),
-		},
-		{
-			Name: "kube_pod_container_resource_limits_memory_bytes",
-			Type: metric.Gauge,
-			Help: "The limit on memory to be used by a container in bytes.",
-			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
-				ms := []*metric.Metric{}
-
-				for _, c := range p.Spec.Containers {
-					lim := c.Resources.Limits
-
-					if mem, ok := lim[v1.ResourceMemory]; ok {
-						ms = append(ms, &metric.Metric{
-							LabelKeys:   []string{"container", "node"},
-							LabelValues: []string{c.Name, p.Spec.NodeName},
-							Value:       float64(mem.Value()),
-						})
-					}
+					metric.LabelKeys = []string{"container", "resource", "unit"}
 				}
 
 				return &metric.Family{
@@ -1032,6 +1038,41 @@ var (
 							Value:       boolFloat64(v.PersistentVolumeClaim.ReadOnly),
 						})
 					}
+				}
+
+				return &metric.Family{
+					Metrics: ms,
+				}
+			}),
+		},
+		{
+			Name: "kube_pod_overhead",
+			Type: metric.Gauge,
+			Help: "The pod overhead associated with running a pod.",
+			GenerateFunc: wrapPodFunc(func(p *v1.Pod) *metric.Family {
+				ms := []*metric.Metric{}
+
+				if p.Spec.Overhead != nil {
+					for resourceName, val := range p.Spec.Overhead {
+						switch resourceName {
+						case v1.ResourceCPU:
+							ms = append(ms, &metric.Metric{
+								LabelValues: []string{sanitizeLabelName(string(resourceName)), string(constant.UnitCore)},
+								Value:       float64(val.MilliValue()) / 1000,
+							})
+
+						case v1.ResourceMemory:
+							ms = append(ms, &metric.Metric{
+								LabelValues: []string{sanitizeLabelName(string(resourceName)), string(constant.UnitByte)},
+								Value:       float64(val.Value()),
+							})
+						}
+					}
+
+				}
+
+				for _, metric := range ms {
+					metric.LabelKeys = []string{"resource", "unit"}
 				}
 
 				return &metric.Family{

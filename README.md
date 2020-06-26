@@ -18,10 +18,12 @@ Kubernetes API, this way users have all the data they require and perform
 heuristics as they see fit.
 
 The metrics are exported on the HTTP endpoint `/metrics` on the listening port
-(default 80). They are served as plaintext. They are designed to be consumed
+(default 8080). They are served as plaintext. They are designed to be consumed
 either by Prometheus itself or by a scraper that is compatible with scraping a
 Prometheus client endpoint. You can also open `/metrics` in a browser to see
-the raw metrics.
+the raw metrics. Note that the metrics exposed on the `/metrics` endpoint
+reflect the current state of the Kubernetes cluster. When Kubernetes objects
+are deleted they are no longer visible on the `/metrics` endpoint.
 
 ## Table of Contents
 
@@ -31,6 +33,8 @@ the raw metrics.
   - [Resource group version compatibility](#resource-group-version-compatibility)
   - [Container Image](#container-image)
 - [Metrics Documentation](#metrics-documentation)
+  - [Conflict resolution in label names](#conflict-resolution-in-label-names)
+  - [Enabling VerticalPodAustoscalers](#enabling-verticalpodaustoscalers)
 - [Kube-state-metrics self metrics](#kube-state-metrics-self-metrics)
 - [Resource recommendation](#resource-recommendation)
 - [A note on costing](#a-note-on-costing)
@@ -49,6 +53,10 @@ the raw metrics.
 
 ### Versioning
 
+> **WARNING**: Please be aware that `master` branch is targeting an upcoming version v2
+> of kube-state-metrics, which includes breaking changes. Documentation for the latest
+> released version (`1.9.5`) is available in the [release-1.9](https://github.com/kubernetes/kube-state-metrics/tree/release-1.9/docs) branch.
+
 #### Kubernetes Version
 
 kube-state-metrics uses [`client-go`](https://github.com/kubernetes/client-go) to talk with
@@ -65,10 +73,10 @@ At most, 5 kube-state-metrics and 5 [kubernetes releases](https://github.com/kub
 | **v1.6.0**         |         ✓           |         -           |          -           |          -           |          -           |
 | **v1.7.2**         |         ✓           |         ✓           |          -           |          -           |          -           |
 | **v1.8.0**         |         ✓           |         ✓           |          ✓           |          -           |          -           |
-| **v1.9.5**         |         ✓           |         ✓           |         ✓           |          ✓           |          ✓           |
-| **master**         |         ✓           |         ✓           |         ✓           |          ✓           |          ✓           |
+| **v1.9.7**         |         -           |         -           |          -           |          ✓           |          -           |
+| **master**         |         -           |         -           |          -           |          ✓           |          ✓           |
 - `✓` Fully supported version range.
-- `-` The Kubernetes cluster has features the client-go library can't use (additional API objects, etc).
+- `-` The Kubernetes cluster has features the client-go library can't use (additional API objects, deprecated APIs, etc).
 
 #### Resource group version compatibility
 Resources in Kubernetes can evolve, i.e., the group version for a resource may change from alpha to beta and finally GA
@@ -78,8 +86,8 @@ release.
 #### Container Image
 
 The latest container image can be found at:
-* `quay.io/coreos/kube-state-metrics:v1.9.5`
-* `k8s.gcr.io/kube-state-metrics:v1.9.5`
+* `quay.io/coreos/kube-state-metrics:v1.9.7`
+* `k8s.gcr.io/kube-state-metrics:v1.9.7`
 
 **Note**:
 The recommended docker registry for kube-state-metrics is `quay.io`. kube-state-metrics on
@@ -92,7 +100,7 @@ those that could be used for actionable alerts. Please contribute PR's for
 additional metrics!
 
 > WARNING: THESE METRIC/TAG NAMES ARE UNSTABLE AND MAY CHANGE IN A FUTURE RELEASE.
-> For now, the following metrics and collectors
+> For now, the following metrics and resources
 >
 > **metrics**
 >	* `kube_pod_container_resource_requests_nvidia_gpu_devices`
@@ -102,14 +110,43 @@ additional metrics!
 >
 >	are removed in kube-state-metrics v1.4.0.
 >
-> Any collectors and metrics based on alpha Kubernetes APIs are excluded from any stability guarantee,
+> Any resources and metrics based on alpha Kubernetes APIs are excluded from any stability guarantee,
 > which may be changed at any given release.
 
 See the [`docs`](docs) directory for more information on the exposed metrics.
 
+#### Conflict resolution in label names
+
+The `*_labels` family of metrics exposes Kubernetes labels as Prometheus labels.
+As [Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set)
+is more liberal than
+[Prometheus](https://prometheus.io/docs/concepts/data_model/#metric-names-and-labels)
+in terms of allowed characters in label names,
+we automatically convert unsupported characters to underscores.
+For example, `app.kubernetes.io/name` becomes `label_app_kubernetes_io_name`.
+
+This conversion can create conflicts when multiple Kubernetes labels like
+`foo-bar` and `foo_bar` would be converted to the same Prometheus label `label_foo_bar`.
+
+Kube-state-metrics automatically adds a suffix `_conflictN` to resolve this conflict,
+so it converts the above labels to
+`label_foo_bar_conflict1` and `label_foo_bar_conflict2`.
+
+If you'd like to have more control over how this conflict is resolved,
+you might want to consider addressing this issue on a different level of the stack,
+e.g. by standardizing Kubernetes labels using an
+[Admission Webhook](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/)
+that ensures that there are no possible conflicts.
+
+#### Enabling VerticalPodAustoscalers
+
+Please note that the collector for `verticalpodautoscalers` are disabled dy default.
+This is because Vertical Pod Austocalers are managed as custom resources. If you want to enable this collector,
+please ensure that you have the `v1beta2` CRDs installed beforehand. They can be found [here](https://github.com/kubernetes/autoscaler/blob/master/vertical-pod-autoscaler/deploy/vpa-beta2-crd.yaml).
+
 ### Kube-state-metrics self metrics
 
-kube-state-metrics exposes its own general process metrics under `--telemetry-host` and `--telemetry-port` (default 81).
+kube-state-metrics exposes its own general process metrics under `--telemetry-host` and `--telemetry-port` (default 8081).
 
 kube-state-metrics also exposes list and watch success and error metrics. These can be used to calculate the error rate of list or watch resources.
 If you encounter those errors in the metrics, it is most likely a configuration or permission issue, and the next thing to investigate would be looking
@@ -172,7 +209,7 @@ metric-server it too is not responsibile for exporting its metrics anywhere.
 Having kube-state-metrics as a separate project also enables access to these
 metrics from monitoring systems such as Prometheus.
 
-#### Horizontal scaling (sharding)
+### Horizontal scaling (sharding)
 
 In order to scale kube-state-metrics horizontally, some automated sharding capabilities have been implemented. It is configured with the following flags:
 
@@ -259,7 +296,7 @@ subjects:
     namespace: your-namespace-where-kube-state-metrics-will-deployed
 ```
 
-- then specify a set of namespaces (using the `--namespace` option) and a set of kubernetes objects (using the `--collectors`) that your serviceaccount has access to in the `kube-state-metrics` deployment configuration
+- then specify a set of namespaces (using the `--namespace` option) and a set of kubernetes objects (using the `--resources`) that your serviceaccount has access to in the `kube-state-metrics` deployment configuration
 
 ```yaml
 spec:
@@ -268,7 +305,7 @@ spec:
       containers:
       - name: kube-state-metrics
         args:
-          - '--collectors=pods'
+          - '--resources=pods'
           - '--namespace=project1'
 ```
 

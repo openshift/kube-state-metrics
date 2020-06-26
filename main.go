@@ -36,11 +36,11 @@ import (
 	"k8s.io/klog"
 
 	"k8s.io/kube-state-metrics/internal/store"
+	"k8s.io/kube-state-metrics/pkg/allowdenylist"
 	"k8s.io/kube-state-metrics/pkg/metricshandler"
 	"k8s.io/kube-state-metrics/pkg/options"
 	"k8s.io/kube-state-metrics/pkg/util/proc"
 	"k8s.io/kube-state-metrics/pkg/version"
-	"k8s.io/kube-state-metrics/pkg/whiteblacklist"
 )
 
 const (
@@ -81,17 +81,17 @@ func main() {
 	ksmMetricsRegistry := prometheus.NewRegistry()
 	storeBuilder.WithMetrics(ksmMetricsRegistry)
 
-	var collectors []string
-	if len(opts.Collectors) == 0 {
-		klog.Info("Using default collectors")
-		collectors = options.DefaultCollectors.AsSlice()
+	var resources []string
+	if len(opts.Resources) == 0 {
+		klog.Info("Using default resources")
+		resources = options.DefaultResources.AsSlice()
 	} else {
-		klog.Infof("Using collectors %s", opts.Collectors.String())
-		collectors = opts.Collectors.AsSlice()
+		klog.Infof("Using resources %s", opts.Resources.String())
+		resources = opts.Resources.AsSlice()
 	}
 
-	if err := storeBuilder.WithEnabledResources(collectors); err != nil {
-		klog.Fatalf("Failed to set up collectors: %v", err)
+	if err := storeBuilder.WithEnabledResources(resources); err != nil {
+		klog.Fatalf("Failed to set up resources: %v", err)
 	}
 
 	if len(opts.Namespaces) == 0 {
@@ -106,39 +106,19 @@ func main() {
 		storeBuilder.WithNamespaces(opts.Namespaces)
 	}
 
-	whiteBlackList, err := whiteblacklist.New(opts.MetricWhitelist, opts.MetricBlacklist)
+	allowDenyList, err := allowdenylist.New(opts.MetricAllowlist, opts.MetricDenylist)
 	if err != nil {
 		klog.Fatal(err)
 	}
 
-	if opts.DisablePodNonGenericResourceMetrics {
-		whiteBlackList.Exclude([]string{
-			"kube_pod_container_resource_requests_cpu_cores",
-			"kube_pod_container_resource_requests_memory_bytes",
-			"kube_pod_container_resource_limits_cpu_cores",
-			"kube_pod_container_resource_limits_memory_bytes",
-		})
-	}
-
-	if opts.DisableNodeNonGenericResourceMetrics {
-		whiteBlackList.Exclude([]string{
-			"kube_node_status_capacity_cpu_cores",
-			"kube_node_status_capacity_memory_bytes",
-			"kube_node_status_capacity_pods",
-			"kube_node_status_allocatable_cpu_cores",
-			"kube_node_status_allocatable_memory_bytes",
-			"kube_node_status_allocatable_pods",
-		})
-	}
-
-	err = whiteBlackList.Parse()
+	err = allowDenyList.Parse()
 	if err != nil {
-		klog.Fatalf("error initializing the whiteblack list : %v", err)
+		klog.Fatalf("error initializing the allowdeny list : %v", err)
 	}
 
-	klog.Infof("metric white-blacklisting: %v", whiteBlackList.Status())
+	klog.Infof("metric allow-denylisting: %v", allowDenyList.Status())
 
-	storeBuilder.WithWhiteBlackList(whiteBlackList)
+	storeBuilder.WithAllowDenyList(allowDenyList)
 
 	storeBuilder.WithGenerateStoreFunc(storeBuilder.DefaultGenerateStoreFunc())
 
