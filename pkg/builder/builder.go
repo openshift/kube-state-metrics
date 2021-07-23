@@ -44,7 +44,7 @@ func NewBuilder() *Builder {
 }
 
 // WithMetrics sets the metrics property of a Builder.
-func (b *Builder) WithMetrics(r *prometheus.Registry) {
+func (b *Builder) WithMetrics(r prometheus.Registerer) {
 	b.internal.WithMetrics(r)
 }
 
@@ -82,6 +82,11 @@ func (b *Builder) WithVPAClient(c vpaclientset.Interface) {
 // by the store build by the Builder.
 func (b *Builder) WithAllowDenyList(l ksmtypes.AllowDenyLister) {
 	b.internal.WithAllowDenyList(l)
+}
+
+// WithAllowLabels configures which labels can be returned for metrics
+func (b *Builder) WithAllowLabels(l map[string][]string) {
+	b.internal.WithAllowLabels(l)
 }
 
 // WithGenerateStoreFunc configures a custom generate store function
