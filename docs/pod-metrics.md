@@ -2,6 +2,7 @@
 
 | Metric name| Metric type | Description | Unit (where applicable) | Labels/tags | Status |
 | ---------- | ----------- | ----------- | ----------------------- | ----------- | ------ |
+| kube_pod_annotations | Gauge | Kubernetes annotations converted to Prometheus labels | | `pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `annotation_POD_ANNOTATION`=&lt;POD_ANNOTATION&gt; <br> `uid`=&lt;pod-uid&gt; | EXPERIMENTAL |
 | kube_pod_info | Gauge | Information about pod | | `pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `host_ip`=&lt;host-ip&gt; <br> `pod_ip`=&lt;pod-ip&gt; <br> `node`=&lt;node-name&gt;<br> `created_by_kind`=&lt;created_by_kind&gt;<br> `created_by_name`=&lt;created_by_name&gt;<br> `uid`=&lt;pod-uid&gt;<br> `priority_class`=&lt;priority_class&gt;<br> `host_network`=&lt;host_network&gt;| STABLE |
 | kube_pod_start_time | Gauge | Start time in unix timestamp for a pod | seconds | `pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `uid`=&lt;pod-uid&gt; | STABLE |
 | kube_pod_completion_time | Gauge | Completion time in unix timestamp for a pod | seconds | `pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `uid`=&lt;pod-uid&gt; | STABLE |
@@ -49,7 +50,7 @@
 | kube_pod_init_container_resource_requests_ephemeral_storage_bytes | Gauge | Bytes of ephemeral-storage requested by an init container | bytes |`container`=&lt;container-name&gt; <br> `pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `uid`=&lt;pod-uid&gt; | EXPERIMENTAL |
 | kube_pod_spec_volumes_persistentvolumeclaims_info | Gauge | Information about persistentvolumeclaim volumes in a pod | |`pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `volume`=&lt;volume-name&gt;  <br> `persistentvolumeclaim`=&lt;persistentvolumeclaim-claimname&gt; <br> `uid`=&lt;pod-uid&gt; | STABLE |
 | kube_pod_spec_volumes_persistentvolumeclaims_readonly | Gauge | Describes whether a persistentvolumeclaim is mounted read only | bool |`pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt;  <br> `volume`=&lt;volume-name&gt;  <br> `persistentvolumeclaim`=&lt;persistentvolumeclaim-claimname&gt; <br> `uid`=&lt;pod-uid&gt; | STABLE |
-| kube_pod_status_reason | Gauge | The pod status reasons | |`pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `reason`=&lt;NodeLost\|Evicted\|UnexpectedAdmissionError&gt; <br> `uid`=&lt;pod-uid&gt; | EXPERIMENTAL |
+| kube_pod_status_reason | Gauge | The pod status reasons | |`pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `reason`=&lt;Evicted\|NodeAffinity\|NodeLost\|Shutdown\|UnexpectedAdmissionError&gt; <br> `uid`=&lt;pod-uid&gt; | EXPERIMENTAL |
 | kube_pod_status_scheduled_time | Gauge | Unix timestamp when pod moved into scheduled status | seconds |`pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `uid`=&lt;pod-uid&gt; | STABLE |
 | kube_pod_status_unschedulable | Gauge | Describes the unschedulable status for the pod | |`pod`=&lt;pod-name&gt; <br> `namespace`=&lt;pod-namespace&gt; <br> `uid`=&lt;pod-uid&gt; | STABLE |
 
