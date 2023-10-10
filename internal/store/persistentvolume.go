@@ -179,6 +179,7 @@ func persistentVolumeMetricFamilies(allowAnnotationsList, allowLabelsList []stri
 					iscsiTargetPortal, iscsiIQN, iscsiLun, iscsiInitiatorName,
 					nfsServer, nfsPath,
 					csiDriver, csiVolumeHandle,
+					csiMounter, csiMapOptions,
 					localFS, localPath,
 					hostPath, hostPathType string
 				)
@@ -219,6 +220,13 @@ func persistentVolumeMetricFamilies(allowAnnotationsList, allowLabelsList []stri
 				case p.Spec.PersistentVolumeSource.CSI != nil:
 					csiDriver = p.Spec.PersistentVolumeSource.CSI.Driver
 					csiVolumeHandle = p.Spec.PersistentVolumeSource.CSI.VolumeHandle
+					for k, v := range p.Spec.PersistentVolumeSource.CSI.VolumeAttributes {
+						if k == "mapOptions" {
+							csiMapOptions = v
+						} else if k == "mounter" {
+							csiMounter = v
+						}
+					}
 				case p.Spec.PersistentVolumeSource.Local != nil:
 					localPath = p.Spec.PersistentVolumeSource.Local.Path
 					if p.Spec.PersistentVolumeSource.Local.FSType != nil {
@@ -250,6 +258,8 @@ func persistentVolumeMetricFamilies(allowAnnotationsList, allowLabelsList []stri
 								"nfs_path",
 								"csi_driver",
 								"csi_volume_handle",
+								"csi_mounter",
+								"csi_map_options",
 								"local_path",
 								"local_fs",
 								"host_path",
@@ -271,6 +281,8 @@ func persistentVolumeMetricFamilies(allowAnnotationsList, allowLabelsList []stri
 								nfsPath,
 								csiDriver,
 								csiVolumeHandle,
+								csiMounter,
+								csiMapOptions,
 								localPath,
 								localFS,
 								hostPath,
