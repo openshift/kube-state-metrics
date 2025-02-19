@@ -2,7 +2,7 @@ FLAGS =
 TESTENVVAR =
 REGISTRY ?= gcr.io/k8s-staging-kube-state-metrics
 TAG_PREFIX = v
-VERSION = $(shell gomplate -d config=./data.yaml --in '{{ (datasource "config").version }}')
+VERSION = $(shell grep '^version:' data.yaml | grep -oE "[0-9]+.[0-9]+.[0-9]+")
 TAG ?= $(TAG_PREFIX)$(VERSION)
 LATEST_RELEASE_BRANCH := release-$(shell echo $(VERSION) | grep -ohE "[0-9]+.[0-9]+")
 BRANCH = $(strip $(shell git rev-parse --abbrev-ref HEAD))
@@ -15,13 +15,13 @@ GIT_COMMIT ?= $(shell git rev-parse --short HEAD)
 OS ?= $(shell uname -s | tr A-Z a-z)
 ALL_ARCH = amd64 arm arm64 ppc64le s390x
 PKG = github.com/prometheus/common
-PROMETHEUS_VERSION = 2.53.1
-GO_VERSION = 1.22.5
+PROMETHEUS_VERSION = 2.55.1
+GO_VERSION = 1.23.5
 IMAGE = $(REGISTRY)/kube-state-metrics
 MULTI_ARCH_IMG = $(IMAGE)-$(ARCH)
 USER ?= $(shell id -u -n)
 HOST ?= $(shell hostname)
-MARKDOWNLINT_CLI2_VERSION = 0.13.0
+MARKDOWNLINT_CLI2_VERSION = 0.17.2
 
 
 export DOCKER_CLI_EXPERIMENTAL=enabled
@@ -97,8 +97,8 @@ validate-template: generate-template
 # the two.
 test-benchmark-compare:
 	@git fetch
-	./tests/compare_benchmarks.sh main
-	./tests/compare_benchmarks.sh ${LATEST_RELEASE_BRANCH}
+	./tests/compare_benchmarks.sh main 2
+	./tests/compare_benchmarks.sh ${LATEST_RELEASE_BRANCH} 2
 
 all: all-container
 

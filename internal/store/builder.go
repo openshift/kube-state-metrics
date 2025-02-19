@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,24 +65,24 @@ var _ ksmtypes.BuilderInterface = &Builder{}
 // Builder helps to build store. It follows the builder pattern
 // (https://en.wikipedia.org/wiki/Builder_pattern).
 type Builder struct {
-	kubeClient            clientset.Interface
-	customResourceClients map[string]interface{}
-	namespaces            options.NamespaceList
-	// namespaceFilter is inside fieldSelectorFilter
-	fieldSelectorFilter           string
+	kubeClient                    clientset.Interface
 	ctx                           context.Context
-	enabledResources              []string
 	familyGeneratorFilter         generator.FamilyGeneratorFilter
+	customResourceClients         map[string]interface{}
 	listWatchMetrics              *watch.ListWatchMetrics
 	shardingMetrics               *sharding.Metrics
-	shard                         int32
-	totalShards                   int
 	buildStoresFunc               ksmtypes.BuildStoresFunc
 	buildCustomResourceStoresFunc ksmtypes.BuildCustomResourceStoresFunc
 	allowAnnotationsList          map[string][]string
 	allowLabelsList               map[string][]string
-	useAPIServerCache             bool
 	utilOptions                   *options.Options
+	// namespaceFilter is inside fieldSelectorFilter
+	fieldSelectorFilter string
+	namespaces          options.NamespaceList
+	enabledResources    []string
+	totalShards         int
+	shard               int32
+	useAPIServerCache   bool
 }
 
 // NewBuilder returns a new builder.
@@ -113,12 +113,10 @@ func (b *Builder) WithEnabledResources(r []string) error {
 		}
 	}
 
-	var sortedResources []string
-	sortedResources = append(sortedResources, r...)
+	b.enabledResources = append(b.enabledResources, r...)
+	slices.Sort(b.enabledResources)
+	b.enabledResources = slices.Compact(b.enabledResources)
 
-	sort.Strings(sortedResources)
-
-	b.enabledResources = append(b.enabledResources, sortedResources...)
 	return nil
 }
 
@@ -197,7 +195,10 @@ func (b *Builder) DefaultGenerateCustomResourceStoresFunc() ksmtypes.BuildCustom
 func (b *Builder) WithCustomResourceStoreFactories(fs ...customresource.RegistryFactory) {
 	for i := range fs {
 		f := fs[i]
-		gvr := util.GVRFromType(f.Name(), f.ExpectedType())
+		gvr, err := util.GVRFromType(f.Name(), f.ExpectedType())
+		if err != nil {
+			klog.ErrorS(err, "Failed to get GVR from type", "resourceName", f.Name(), "expectedType", f.ExpectedType())
+		}
 		var gvrString string
 		if gvr != nil {
 			gvrString = gvr.String()
@@ -553,7 +554,10 @@ func (b *Builder) buildCustomResourceStores(resourceName string,
 
 	familyHeaders := generator.ExtractMetricFamilyHeaders(metricFamilies)
 
-	gvr := util.GVRFromType(resourceName, expectedType)
+	gvr, err := util.GVRFromType(resourceName, expectedType)
+	if err != nil {
+		klog.ErrorS(err, "Failed to get GVR from type", "resourceName", resourceName, "expectedType", expectedType)
+	}
 	var gvrString string
 	if gvr != nil {
 		gvrString = gvr.String()
@@ -603,7 +607,7 @@ func (b *Builder) startReflector(
 	useAPIServerCache bool,
 ) {
 	instrumentedListWatch := watch.NewInstrumentedListerWatcher(listWatcher, b.listWatchMetrics, reflect.TypeOf(expectedType).String(), useAPIServerCache)
-	reflector := cache.NewReflector(sharding.NewShardedListWatch(b.shard, b.totalShards, instrumentedListWatch), expectedType, store, 0)
+	reflector := cache.NewReflectorWithOptions(sharding.NewShardedListWatch(b.shard, b.totalShards, instrumentedListWatch), expectedType, store, cache.ReflectorOptions{ResyncPeriod: 0})
 	go reflector.Run(b.ctx.Done())
 }
 

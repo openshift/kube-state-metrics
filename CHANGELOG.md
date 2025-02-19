@@ -1,3 +1,42 @@
+## v2.15.0 / 2025-02-03
+
+## Note
+
+* This release builds with Golang `v1.23.5`
+* This release builds with `k8s.io/client-go`: `v0.32.1`
+
+* [BUGFIX] Fix CR cache for GVK all specified case by @chelseychen in <https://github.com/kubernetes/kube-state-metrics/pull/2567>
+* [BUGFIX] Deduplicate tolerations before creating metric by @RiRa12621 in <https://github.com/kubernetes/kube-state-metrics/pull/2559>
+* [BUGFIX] Make `$VERSION` 3rd-party independant by @rexagod in <https://github.com/kubernetes/kube-state-metrics/pull/2572>
+* [BUGFIX] Fix NoNodePod naming in jsonnet by @mrueg in <https://github.com/kubernetes/kube-state-metrics/pull/2598>
+* [BUGFIX] Panic in `util.GVRFromType` for structured types by @L3n41c in <https://github.com/kubernetes/kube-state-metrics/pull/2553>
+* [FEATURE] Add external traffic policy to kube_service_info by @jahantech in <https://github.com/kubernetes/kube-state-metrics/pull/2584>
+* [FEATURE] Promote kube_statefulset_ordinals_start from ALPHA -> STABLE by @pwschuurman in <https://github.com/kubernetes/kube-state-metrics/pull/2415>
+* [FEATURE] Add timezone to kube_cronjob_info / Make kube_cronjob_next_schedule_time timezone-aware by @mrueg in <https://github.com/kubernetes/kube-state-metrics/pull/2376>
+
+## v2.14.0 / 2024-11-08
+
+### Note
+
+* This release builds with Golang `v1.23.3`
+* This release builds with `k8s.io/client-go`: `v0.31.2`
+* This release removes `kube_endpoint_address_not_ready` and `kube_endpoint_address_available` which have been deprecated in 2022. Please use `kube_endpoint_address`as a replacement.
+
+* [BUGFIX] Use --track-unscheduled-pods to select unscheduled pods in Daemonset sharding by @CatherineF-dev in <https://github.com/kubernetes/kube-state-metrics/pull/2388>
+* [BUGFIX] Install tools so VERSION gets set by @mrueg in <https://github.com/kubernetes/kube-state-metrics/pull/2456>
+* [BUGFIX] Syntax errors in kube-state-metrics.libsonnet by @jeffmccune in <https://github.com/kubernetes/kube-state-metrics/pull/2454>
+* [BUGFIX] Set kube_job_status_failed metric even when there are no job.Status.Conditions present by @richabanker in <https://github.com/kubernetes/kube-state-metrics/pull/2485>
+* [BUGFIX] de-duplication of custom resource metrics by @bartlettc22 in <https://github.com/kubernetes/kube-state-metrics/pull/2502>
+* [BUGFIX] Configure sharding every time MetricsHandler.Run runs by @wallee94 in <https://github.com/kubernetes/kube-state-metrics/pull/2478>
+* [BUGFIX] Panic in `util.GVRFromType` for core objects by @L3n41c in <https://github.com/kubernetes/kube-state-metrics/pull/2535>
+* [BUGFIX] Big memory value overflow by @leiwingqueen in <https://github.com/kubernetes/kube-state-metrics/pull/2540>
+* [BUGFIX] Expose empty labels by @mrueg in <https://github.com/kubernetes/kube-state-metrics/pull/2539>
+* [BUGFIX] CustomResourceMetrics: Convert status condition Unknown to a valid value by @Haleygo in <https://github.com/kubernetes/kube-state-metrics/pull/2536>
+* [CHANGE] Remove deprecated endpoint address metric by @mrueg in <https://github.com/kubernetes/kube-state-metrics/pull/2527>
+* [FEATURE] Add new metric kube_job_status_suspended by @Indresh2410 in <https://github.com/kubernetes/kube-state-metrics/pull/2542>
+* [FEATURE] Move endpoint ports into address metric by @mrueg in <https://github.com/kubernetes/kube-state-metrics/pull/2503>
+* [ENHANCEMENT] Use concurrent map when storing metrics by @rarruda in <https://github.com/kubernetes/kube-state-metrics/pull/2510>
+
 ## v2.13.0 / 2024-07-18
 
 ### Note

@@ -283,7 +283,7 @@ spec:
               fieldPath: spec.nodeName
 ```
 
-To track metrics for unassigned pods, you need to add an additional deployment and set `--node=""`, as shown in the following example:
+To track metrics for unassigned pods, you need to add an additional deployment and set `--track-unscheduled-pods`, as shown in the following example:
 
 ```
 apiVersion: apps/v1
@@ -296,7 +296,7 @@ spec:
         name: kube-state-metrics
         args:
         - --resources=pods
-        - --node=""
+        - --track-unscheduled-pods
 ```
 
 Other metrics can be sharded via [Horizontal sharding](#horizontal-sharding).
@@ -408,17 +408,20 @@ Starting from the kube-state-metrics chart `v2.13.3` (kube-state-metrics image `
 
 #### Development
 
-When developing, test a metric dump against your local Kubernetes cluster by
-running:
+When developing, test a metric dump against your local Kubernetes cluster by running:
 
 > Users can override the apiserver address in KUBE-CONFIG file with `--apiserver` command line.
 
- go install
- kube-state-metrics --port=8080 --telemetry-port=8081 --kubeconfig=<KUBE-CONFIG> --apiserver=<APISERVER>
+```
+go install
+kube-state-metrics --port=8080 --telemetry-port=8081 --kubeconfig=<KUBE-CONFIG> --apiserver=<APISERVER>
+```
 
 Then curl the metrics endpoint
 
- curl localhost:8080/metrics
+```
+curl localhost:8080/metrics
+```
 
 To run the e2e tests locally see the documentation in [tests/README.md](./tests/README.md).
 
