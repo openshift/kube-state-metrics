@@ -19,6 +19,10 @@ github.com/davecgh/go-spew/spew
 # github.com/dgryski/go-jump v0.0.0-20211018200510-ba001c3ffce0
 ## explicit
 github.com/dgryski/go-jump
+# github.com/dlclark/regexp2 v1.11.5
+## explicit; go 1.13
+github.com/dlclark/regexp2
+github.com/dlclark/regexp2/syntax
 # github.com/emicklei/go-restful/v3 v3.11.0
 ## explicit; go 1.13
 github.com/emicklei/go-restful/v3
