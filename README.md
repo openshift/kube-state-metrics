@@ -79,12 +79,12 @@ Generally, it is recommended to use the latest release of kube-state-metrics. If
 
 | kube-state-metrics | Kubernetes client-go Version |
 |--------------------|:----------------------------:|
-| **v2.9.2**         | v1.26                        |
-| **v2.10.1**        | v1.27                        |
 | **v2.11.0**        | v1.28                        |
 | **v2.12.0**        | v1.29                        |
 | **v2.13.0**        | v1.30                        |
-| **main**           | v1.30                        |
+| **v2.14.0**        | v1.31                        |
+| **v2.15.0**        | v1.32                        |
+| **main**           | v1.32                        |
 
 #### Resource group version compatibility
 
@@ -96,8 +96,8 @@ release.
 
 The latest container image can be found at:
 
-* `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0` (arch: `amd64`, `arm`, `arm64`, `ppc64le` and `s390x`)
-* View all multi-architecture images at [here](https://explore.ggcr.dev/?image=registry.k8s.io%2Fkube-state-metrics%2Fkube-state-metrics:v2.13.0)
+* `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0` (arch: `amd64`, `arm`, `arm64`, `ppc64le` and `s390x`)
+* View all multi-architecture images at [here](https://explore.ggcr.dev/?image=registry.k8s.io%2Fkube-state-metrics%2Fkube-state-metrics:v2.15.0)
 
 ### Metrics Documentation
 
@@ -282,7 +282,7 @@ spec:
               fieldPath: spec.nodeName
 ```
 
-To track metrics for unassigned pods, you need to add an additional deployment and set `--node=""`, as shown in the following example:
+To track metrics for unassigned pods, you need to add an additional deployment and set `--track-unscheduled-pods`, as shown in the following example:
 
 ```
 apiVersion: apps/v1
@@ -295,7 +295,7 @@ spec:
         name: kube-state-metrics
         args:
         - --resources=pods
-        - --node=""
+        - --track-unscheduled-pods
 ```
 
 Other metrics can be sharded via [Horizontal sharding](#horizontal-sharding).
@@ -407,17 +407,20 @@ Starting from the kube-state-metrics chart `v2.13.3` (kube-state-metrics image `
 
 #### Development
 
-When developing, test a metric dump against your local Kubernetes cluster by
-running:
+When developing, test a metric dump against your local Kubernetes cluster by running:
 
 > Users can override the apiserver address in KUBE-CONFIG file with `--apiserver` command line.
 
- go install
- kube-state-metrics --port=8080 --telemetry-port=8081 --kubeconfig=<KUBE-CONFIG> --apiserver=<APISERVER>
+```
+go install
+kube-state-metrics --port=8080 --telemetry-port=8081 --kubeconfig=<KUBE-CONFIG> --apiserver=<APISERVER>
+```
 
 Then curl the metrics endpoint
 
- curl localhost:8080/metrics
+```
+curl localhost:8080/metrics
+```
 
 To run the e2e tests locally see the documentation in [tests/README.md](./tests/README.md).
 
