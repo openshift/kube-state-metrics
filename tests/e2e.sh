@@ -31,7 +31,7 @@ KUBE_STATE_METRICS_CURRENT_IMAGE_NAME="registry.k8s.io/kube-state-metrics/kube-s
 KUBE_STATE_METRICS_IMAGE_NAME="registry.k8s.io/kube-state-metrics/kube-state-metrics-${ARCH}"
 E2E_SETUP_KIND=${E2E_SETUP_KIND:-}
 E2E_SETUP_KUBECTL=${E2E_SETUP_KUBECTL:-}
-KIND_VERSION=v0.25.0
+KIND_VERSION=v0.29.0
 SUDO=${SUDO:-}
 
 OS=$(uname -s | awk '{print tolower($0)}')
@@ -247,8 +247,14 @@ sleep 33
 klog_err=E$(date +%m%d)
 echo "check for errors in logs"
 
+echo "running authfiler tests.."
+go test -v ./tests/e2e/auth-filter_test.go
+
 echo "running discovery tests..."
 go test -race -v ./tests/e2e/discovery_test.go
+
+echo "running object limits test..."
+go test -v ./tests/e2e/object-limits_test.go
 
 echo "running hot-reload tests..."
 go test -v ./tests/e2e/hot-reload_test.go
