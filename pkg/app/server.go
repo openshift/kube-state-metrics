@@ -125,29 +125,35 @@ func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 	})
 	storeBuilder := store.NewBuilder()
 	storeBuilder.WithMetrics(ksmMetricsRegistry)
-
 	got := options.GetConfigFile(*opts)
 	if got != "" {
-		configFile, err := os.ReadFile(filepath.Clean(got))
-		if err != nil {
-			return fmt.Errorf("failed to read opts config file: %v", err)
-		}
-		// NOTE: Config value will override default values of intersecting options.
-		err = yaml.Unmarshal(configFile, opts)
-		if err != nil {
-			// DO NOT end the process.
-			// We want to allow the user to still be able to fix the misconfigured config (redeploy or edit the configmaps) and reload KSM automatically once that's done.
-			klog.ErrorS(err, "failed to unmarshal opts config file")
-			// Wait for the next reload.
-			klog.InfoS("misconfigured config detected, KSM will automatically reload on next write to the config")
-			klog.InfoS("waiting for config to be fixed")
-			configSuccess.WithLabelValues("config", filepath.Clean(got)).Set(0)
-			<-ctx.Done()
+		if _, err := os.Stat(filepath.Clean(got)); err != nil {
+			klog.ErrorS(err, "encountered error while processing the file", "file", got)
 		} else {
-			configSuccess.WithLabelValues("config", filepath.Clean(got)).Set(1)
-			configSuccessTime.WithLabelValues("config", filepath.Clean(got)).SetToCurrentTime()
-			hash := md5HashAsMetricValue(configFile)
-			configHash.WithLabelValues("config", filepath.Clean(got)).Set(hash)
+			configFile, err := os.ReadFile(filepath.Clean(got))
+			if err != nil {
+				return fmt.Errorf("failed to read opts config file: %v", err)
+			}
+			// NOTE: Config value will override default values of intersecting options.
+			err = yaml.Unmarshal(configFile, opts)
+
+			if err != nil {
+				// DO NOT end the process.
+				// We want to allow the user to still be able to fix the misconfigured config (redeploy or edit the configmaps) and reload KSM automatically once that's done.
+				klog.ErrorS(err, "failed to unmarshal opts config file")
+				// Wait for the next reload.
+				klog.InfoS("misconfigured config detected, KSM will automatically reload on next write to the config")
+				klog.InfoS("waiting for config to be fixed")
+				configSuccess.WithLabelValues("config", filepath.Clean(got)).Set(0)
+				<-ctx.Done()
+			} else {
+				configSuccess.WithLabelValues("config", filepath.Clean(got)).Set(1)
+				configSuccessTime.WithLabelValues("config", filepath.Clean(got)).SetToCurrentTime()
+				hash := md5HashAsMetricValue(configFile)
+				configHash.WithLabelValues("config", filepath.Clean(got)).Set(hash)
+			}
+			opts = configureResourcesAndMetrics(opts, configFile)
+			klog.InfoS("Using config file", "file", got)
 		}
 	}
 
@@ -177,15 +183,18 @@ func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 	}
 
 	if opts.CustomResourceConfigFile != "" {
-		crcFile, err := os.ReadFile(filepath.Clean(opts.CustomResourceConfigFile))
-		if err != nil {
-			return fmt.Errorf("failed to read custom resource config file: %v", err)
+		if _, err := os.Stat(filepath.Clean(opts.CustomResourceConfigFile)); err != nil {
+			klog.ErrorS(err, "encountered error while processing the file", "file", opts.CustomResourceConfigFile)
+		} else {
+			crcFile, err := os.ReadFile(filepath.Clean(opts.CustomResourceConfigFile))
+			if err != nil {
+				return fmt.Errorf("failed to read custom resource config file: %v", err)
+			}
+			configSuccess.WithLabelValues("customresourceconfig", filepath.Clean(opts.CustomResourceConfigFile)).Set(1)
+			configSuccessTime.WithLabelValues("customresourceconfig", filepath.Clean(opts.CustomResourceConfigFile)).SetToCurrentTime()
+			hash := md5HashAsMetricValue(crcFile)
+			configHash.WithLabelValues("customresourceconfig", filepath.Clean(opts.CustomResourceConfigFile)).Set(hash)
 		}
-		configSuccess.WithLabelValues("customresourceconfig", filepath.Clean(opts.CustomResourceConfigFile)).Set(1)
-		configSuccessTime.WithLabelValues("customresourceconfig", filepath.Clean(opts.CustomResourceConfigFile)).SetToCurrentTime()
-		hash := md5HashAsMetricValue(crcFile)
-		configHash.WithLabelValues("customresourceconfig", filepath.Clean(opts.CustomResourceConfigFile)).Set(hash)
-
 	}
 
 	resources := []string{}
@@ -264,9 +273,12 @@ func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 	if err := storeBuilder.WithAllowAnnotations(opts.AnnotationsAllowList); err != nil {
 		return fmt.Errorf("failed to set up annotations allowlist: %v", err)
 	}
+	klog.InfoS("Using annotations allowlist", "annotationsAllowList", opts.AnnotationsAllowList)
+
 	if err := storeBuilder.WithAllowLabels(opts.LabelsAllowList); err != nil {
 		return fmt.Errorf("failed to set up labels allowlist: %v", err)
 	}
+	klog.InfoS("Using labels allowlist", "labelsAllowList", opts.LabelsAllowList)
 
 	ksmMetricsRegistry.MustRegister(
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -376,6 +388,59 @@ func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 
 	klog.InfoS("Exited")
 	return nil
+}
+
+func configureResourcesAndMetrics(opts *options.Options, configFile []byte) *options.Options {
+	// If the config file is set, we will overwrite the opts with the config file.
+	// This is only needed for maps because the default behaviour of yaml.Unmarshal is to append keys (and overwrite any conflicting ones).
+	config := options.NewOptions()
+	err := yaml.Unmarshal(configFile, &config)
+	if err == nil {
+		if len(config.Resources) > 0 {
+			opts.Resources = options.ResourceSet{}
+			for resource := range config.Resources {
+				opts.Resources[resource] = struct{}{}
+			}
+		}
+
+		if len(config.MetricAllowlist) > 0 {
+			opts.MetricAllowlist = options.MetricSet{}
+			for metric := range config.MetricAllowlist {
+				opts.MetricAllowlist[metric] = struct{}{}
+			}
+		}
+
+		if len(config.MetricDenylist) > 0 {
+			opts.MetricDenylist = options.MetricSet{}
+			for metric := range config.MetricDenylist {
+				opts.MetricDenylist[metric] = struct{}{}
+			}
+		}
+
+		if len(config.MetricOptInList) > 0 {
+			opts.MetricOptInList = options.MetricSet{}
+			for metric := range config.MetricOptInList {
+				opts.MetricOptInList[metric] = struct{}{}
+			}
+		}
+
+		if len(config.LabelsAllowList) > 0 {
+			opts.LabelsAllowList = options.LabelsAllowList{}
+			for label, value := range config.LabelsAllowList {
+				opts.LabelsAllowList[label] = value
+			}
+		}
+
+		if len(config.AnnotationsAllowList) > 0 {
+			opts.AnnotationsAllowList = options.LabelsAllowList{}
+			for annotation, value := range config.AnnotationsAllowList {
+				opts.AnnotationsAllowList[annotation] = value
+			}
+		}
+	} else {
+		klog.ErrorS(err, "failed to unmarshal configFile")
+	}
+	return opts
 }
 
 func buildTelemetryServer(registry prometheus.Gatherer, authFilter bool, kubeConfig *rest.Config) *http.ServeMux {
@@ -539,11 +604,17 @@ func resolveCustomResourceConfig(opts *options.Options) (customresourcestate.Con
 		return yaml.NewDecoder(strings.NewReader(s)), nil
 	}
 	if file := opts.CustomResourceConfigFile; file != "" {
-		f, err := os.Open(filepath.Clean(file))
-		if err != nil {
-			return nil, fmt.Errorf("unable to open Custom Resource State Metrics file: %v", err)
+		if opts.ContinueWithoutCustomResourceConfigFile {
+			if _, err := os.Stat(filepath.Clean(file)); err != nil {
+				klog.Warningf("Failed to open Custom Resource State Metrics file %s: %v, ignoring", file, err)
+			}
+		} else {
+			f, err := os.Open(filepath.Clean(file))
+			if err != nil {
+				return nil, fmt.Errorf("unable to open Custom Resource State Metrics file: %v", err)
+			}
+			return yaml.NewDecoder(f), nil
 		}
-		return yaml.NewDecoder(f), nil
 	}
 	return nil, nil
 }
