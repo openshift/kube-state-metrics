@@ -98,8 +98,10 @@ func (r *CRDiscoverer) RemoveFromMap(gvkps ...groupVersionKindPlural) {
 		}
 		for i, el := range r.Map[gvkp.Group][gvkp.Version] {
 			if el.Kind == gvkp.Kind {
-				close(r.GVKToReflectorStopChanMap[gvkp.GroupVersionKind.String()])
-				delete(r.GVKToReflectorStopChanMap, gvkp.GroupVersionKind.String())
+				if _, ok := r.GVKToReflectorStopChanMap[gvkp.GroupVersionKind.String()]; ok {
+					close(r.GVKToReflectorStopChanMap[gvkp.GroupVersionKind.String()])
+					delete(r.GVKToReflectorStopChanMap, gvkp.GroupVersionKind.String())
+				}
 				if len(r.Map[gvkp.Group][gvkp.Version]) == 1 {
 					delete(r.Map[gvkp.Group], gvkp.Version)
 					if len(r.Map[gvkp.Group]) == 0 {
