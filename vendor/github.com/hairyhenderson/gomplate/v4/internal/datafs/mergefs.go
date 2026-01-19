@@ -22,7 +22,7 @@ import (
 	"github.com/hairyhenderson/gomplate/v4/internal/urlhelpers"
 )
 
-// NewMergeFS returns a new filesystem that merges the contents of multiple
+// newMergeFS returns a new filesystem that merges the contents of multiple
 // paths. Only a URL like "merge:" or "merge:///" makes sense here - the
 // piped-separated lists of sub-sources to merge must be given to Open.
 //
@@ -31,7 +31,7 @@ import (
 //
 // An FSProvider will also be needed, which can be provided with a context
 // using ContextWithFSProvider. Provide that context with fsimpl.WithContextFS.
-func NewMergeFS(u *url.URL) (fs.FS, error) {
+func newMergeFS(u *url.URL) (fs.FS, error) {
 	if u.Scheme != "merge" {
 		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
 	}
@@ -49,7 +49,7 @@ type mergeFS struct {
 }
 
 //nolint:gochecknoglobals
-var MergeFS = fsimpl.FSProviderFunc(NewMergeFS, "merge")
+var mergeFSProvider = fsimpl.FSProviderFunc(newMergeFS, "merge")
 
 var (
 	_ fs.FS                    = (*mergeFS)(nil)
@@ -133,7 +133,7 @@ func (f *mergeFS) Open(name string) (fs.File, error) {
 
 		// need to support absolute paths on local filesystem too
 		// TODO: this is a hack, probably fix this?
-		if fsURL.Scheme == "file" && runtime.GOOS != "windows" {
+		if fsURL.Scheme == "file" && runtime.GOOS != osWindows {
 			base = fsURL.Path + base
 		}
 
@@ -264,7 +264,7 @@ func (f *mergeFile) readSubFile(sf subFile) (map[string]any, error) {
 	return sfData, nil
 }
 
-func mergeData(data []map[string]interface{}) ([]byte, error) {
+func mergeData(data []map[string]any) ([]byte, error) {
 	dst := data[0]
 	data = data[1:]
 

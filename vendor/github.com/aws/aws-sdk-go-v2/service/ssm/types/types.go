@@ -193,13 +193,14 @@ type AssociationDescription struct {
 
 	// Choose the parameter that will define how your automation will branch out. This
 	// target is required for associations that use an Automation runbook and target
-	// resources by using rate controls. Automation is a capability of Amazon Web
-	// Services Systems Manager.
+	// resources by using rate controls. Automation is a tool in Amazon Web Services
+	// Systems Manager.
 	AutomationTargetParameterName *string
 
 	// The names or Amazon Resource Names (ARNs) of the Change Calendar type documents
 	// your associations are gated under. The associations only run when that change
-	// calendar is open. For more information, see [Amazon Web Services Systems Manager Change Calendar].
+	// calendar is open. For more information, see [Amazon Web Services Systems Manager Change Calendar]in the Amazon Web Services Systems
+	// Manager User Guide.
 	//
 	// [Amazon Web Services Systems Manager Change Calendar]: https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-change-calendar
 	CalendarNames []string
@@ -284,9 +285,9 @@ type AssociationDescription struct {
 	// successfully, the association is NON-COMPLIANT .
 	//
 	// In MANUAL mode, you must specify the AssociationId as a parameter for the PutComplianceItems API
-	// operation. In this case, compliance data isn't managed by State Manager, a
-	// capability of Amazon Web Services Systems Manager. It is managed by your direct
-	// call to the PutComplianceItemsAPI operation.
+	// operation. In this case, compliance data isn't managed by State Manager, a tool
+	// in Amazon Web Services Systems Manager. It is managed by your direct call to the
+	// PutComplianceItemsAPI operation.
 	//
 	// By default, all associations use AUTO mode.
 	SyncCompliance AssociationSyncCompliance
@@ -477,7 +478,7 @@ type AssociationStatus struct {
 // Information about the association version.
 type AssociationVersionInfo struct {
 
-	// By default, when you create a new associations, the system runs it immediately
+	// By default, when you create new associations, the system runs it immediately
 	// after it is created and then according to the schedule you specified. Specify
 	// this option if you don't want an association to run immediately after you create
 	// it. This parameter isn't supported for rate expressions.
@@ -495,7 +496,8 @@ type AssociationVersionInfo struct {
 
 	// The names or Amazon Resource Names (ARNs) of the Change Calendar type documents
 	// your associations are gated under. The associations for this version only run
-	// when that Change Calendar is open. For more information, see [Amazon Web Services Systems Manager Change Calendar].
+	// when that Change Calendar is open. For more information, see [Amazon Web Services Systems Manager Change Calendar]in the Amazon Web
+	// Services Systems Manager User Guide.
 	//
 	// [Amazon Web Services Systems Manager Change Calendar]: https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-change-calendar
 	CalendarNames []string
@@ -565,9 +567,9 @@ type AssociationVersionInfo struct {
 	// successfully, the association is NON-COMPLIANT .
 	//
 	// In MANUAL mode, you must specify the AssociationId as a parameter for the PutComplianceItems API
-	// operation. In this case, compliance data isn't managed by State Manager, a
-	// capability of Amazon Web Services Systems Manager. It is managed by your direct
-	// call to the PutComplianceItemsAPI operation.
+	// operation. In this case, compliance data isn't managed by State Manager, a tool
+	// in Amazon Web Services Systems Manager. It is managed by your direct call to the
+	// PutComplianceItemsAPI operation.
 	//
 	// By default, all associations use AUTO mode.
 	SyncCompliance AssociationSyncCompliance
@@ -1005,6 +1007,14 @@ type BaselineOverride struct {
 	// Applies to Linux managed nodes only.
 	ApprovedPatchesEnableNonSecurity bool
 
+	// Indicates whether managed nodes for which there are available security-related
+	// patches that have not been approved by the baseline are being defined as
+	// COMPLIANT or NON_COMPLIANT . This option is specified when the
+	// CreatePatchBaseline or UpdatePatchBaseline commands are run.
+	//
+	// Applies to Windows Server managed nodes only.
+	AvailableSecurityUpdatesComplianceStatus PatchComplianceStatus
+
 	// A set of patch filters, typically used for approval rules.
 	GlobalFilters *PatchFilterGroup
 
@@ -1134,9 +1144,9 @@ type Command struct {
 	// The date and time the command was requested.
 	RequestedDateTime *time.Time
 
-	// The Identity and Access Management (IAM) service role that Run Command, a
-	// capability of Amazon Web Services Systems Manager, uses to act on your behalf
-	// when sending notifications about command status changes.
+	// The Identity and Access Management (IAM) service role that Run Command, a tool
+	// in Amazon Web Services Systems Manager, uses to act on your behalf when sending
+	// notifications about command status changes.
 	ServiceRole *string
 
 	// The status of the command.
@@ -1341,10 +1351,9 @@ type CommandInvocation struct {
 	// The time and date the request was sent to this managed node.
 	RequestedDateTime *time.Time
 
-	// The Identity and Access Management (IAM) service role that Run Command, a
-	// capability of Amazon Web Services Systems Manager, uses to act on your behalf
-	// when sending notifications about command status changes on a per managed node
-	// basis.
+	// The Identity and Access Management (IAM) service role that Run Command, a tool
+	// in Amazon Web Services Systems Manager, uses to act on your behalf when sending
+	// notifications about command status changes on a per managed node basis.
 	ServiceRole *string
 
 	// The URL to the plugin's StdErr file in Amazon Simple Storage Service (Amazon
@@ -1702,10 +1711,18 @@ type CreateAssociationBatchRequestEntry struct {
 	// command.
 	AlarmConfiguration *AlarmConfiguration
 
-	// By default, when you create a new associations, the system runs it immediately
-	// after it is created and then according to the schedule you specified. Specify
-	// this option if you don't want an association to run immediately after you create
-	// it. This parameter isn't supported for rate expressions.
+	// By default, when you create a new association, the system runs it immediately
+	// after it is created and then according to the schedule you specified and when
+	// target changes are detected. Specify true for ApplyOnlyAtCronInterval if you
+	// want the association to run only according to the schedule you specified.
+	//
+	// For more information, see [Understanding when associations are applied to resources] and [>About target updates with Automation runbooks] in the Amazon Web Services Systems Manager User
+	// Guide.
+	//
+	// This parameter isn't supported for rate expressions.
+	//
+	// [Understanding when associations are applied to resources]: https://docs.aws.amazon.com/systems-manager/latest/userguide/state-manager-about.html#state-manager-about-scheduling
+	// [>About target updates with Automation runbooks]: https://docs.aws.amazon.com/systems-manager/latest/userguide/state-manager-about.html#runbook-target-updates
 	ApplyOnlyAtCronInterval bool
 
 	// Specify a descriptive name for the association.
@@ -1713,12 +1730,13 @@ type CreateAssociationBatchRequestEntry struct {
 
 	// Specify the target for the association. This target is required for
 	// associations that use an Automation runbook and target resources by using rate
-	// controls. Automation is a capability of Amazon Web Services Systems Manager.
+	// controls. Automation is a tool in Amazon Web Services Systems Manager.
 	AutomationTargetParameterName *string
 
 	// The names or Amazon Resource Names (ARNs) of the Change Calendar type documents
 	// your associations are gated under. The associations only run when that Change
-	// Calendar is open. For more information, see [Amazon Web Services Systems Manager Change Calendar].
+	// Calendar is open. For more information, see [Amazon Web Services Systems Manager Change Calendar]in the Amazon Web Services Systems
+	// Manager User Guide.
 	//
 	// [Amazon Web Services Systems Manager Change Calendar]: https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-change-calendar
 	CalendarNames []string
@@ -1803,9 +1821,9 @@ type CreateAssociationBatchRequestEntry struct {
 	// successfully, the association is NON-COMPLIANT .
 	//
 	// In MANUAL mode, you must specify the AssociationId as a parameter for the PutComplianceItems API
-	// operation. In this case, compliance data isn't managed by State Manager, a
-	// capability of Amazon Web Services Systems Manager. It is managed by your direct
-	// call to the PutComplianceItemsAPI operation.
+	// operation. In this case, compliance data isn't managed by State Manager, a tool
+	// in Amazon Web Services Systems Manager. It is managed by your direct call to the
+	// PutComplianceItemsAPI operation.
 	//
 	// By default, all associations use AUTO mode.
 	SyncCompliance AssociationSyncCompliance
@@ -1820,6 +1838,34 @@ type CreateAssociationBatchRequestEntry struct {
 
 	// The managed nodes targeted by the request.
 	Targets []Target
+
+	noSmithyDocumentSerde
+}
+
+// The temporary security credentials, which include an access key ID, a secret
+// access key, and a security (or session) token.
+type Credentials struct {
+
+	// The access key ID that identifies the temporary security credentials.
+	//
+	// This member is required.
+	AccessKeyId *string
+
+	// The datetime on which the current credentials expire.
+	//
+	// This member is required.
+	ExpirationTime *time.Time
+
+	// The secret access key that can be used to sign requests.
+	//
+	// This member is required.
+	SecretAccessKey *string
+
+	// The token that users must pass to the service API to use the temporary
+	// credentials.
+	//
+	// This member is required.
+	SessionToken *string
 
 	noSmithyDocumentSerde
 }
@@ -2721,6 +2767,14 @@ type InstancePatchState struct {
 	// This member is required.
 	PatchGroup *string
 
+	// The number of security-related patches that are available but not approved
+	// because they didn't meet the patch baseline requirements. For example, an
+	// updated version of a patch might have been released before the specified
+	// auto-approval period was over.
+	//
+	// Applies to Windows Server managed nodes only.
+	AvailableSecurityUpdateCount *int32
+
 	// The number of patches per node that are specified as Critical for compliance
 	// reporting in the patch baseline aren't installed. These patches might be
 	// missing, have failed installation, were rejected, or were installed but awaiting
@@ -2813,8 +2867,8 @@ type InstancePatchState struct {
 	SnapshotId *string
 
 	// The number of patches beyond the supported limit of NotApplicableCount that
-	// aren't reported by name to Inventory. Inventory is a capability of Amazon Web
-	// Services Systems Manager.
+	// aren't reported by name to Inventory. Inventory is a tool in Amazon Web Services
+	// Systems Manager.
 	UnreportedNotApplicableCount *int32
 
 	noSmithyDocumentSerde
@@ -4580,8 +4634,8 @@ type ParameterInlinePolicy struct {
 	// The JSON text of the policy.
 	PolicyText *string
 
-	// The type of policy. Parameter Store, a capability of Amazon Web Services
-	// Systems Manager, supports the following policy types: Expiration,
+	// The type of policy. Parameter Store, a tool in Amazon Web Services Systems
+	// Manager, supports the following policy types: Expiration,
 	// ExpirationNotification, and NoChangeNotification.
 	PolicyType *string
 
@@ -5827,7 +5881,7 @@ type Tag struct {
 //
 // Supported formats include the following.
 //
-// For all Systems Manager capabilities:
+// For all Systems Manager tools:
 //
 //   - Key=tag-key,Values=tag-value-1,tag-value-2
 //

@@ -1,5 +1,105 @@
 # Changelog
 
+## [0.3.1](https://github.com/hairyhenderson/go-fsimpl/compare/v0.3.0...v0.3.1) (2025-05-25)
+
+
+### Dependencies
+
+* **actions:** Bump actions/setup-go in the actions group ([#1056](https://github.com/hairyhenderson/go-fsimpl/issues/1056)) ([24392f4](https://github.com/hairyhenderson/go-fsimpl/commit/24392f455013c876173af87310b78d76f29db083))
+* **actions:** Bump github/codeql-action from 3.28.17 to 3.28.18 ([#1058](https://github.com/hairyhenderson/go-fsimpl/issues/1058)) ([110564d](https://github.com/hairyhenderson/go-fsimpl/commit/110564d45bc15a597243e0832b0bcf42bfe2d418))
+* **actions:** Bump golangci/golangci-lint-action from 7.0.1 to 8.0.0 ([#1055](https://github.com/hairyhenderson/go-fsimpl/issues/1055)) ([fa4a6a2](https://github.com/hairyhenderson/go-fsimpl/commit/fa4a6a215e5e5e510dd229b1536fc82e6669c6dc))
+* **go:** Bump cloud.google.com/go/compute/metadata from 0.6.0 to 0.7.0 ([#1057](https://github.com/hairyhenderson/go-fsimpl/issues/1057)) ([93974da](https://github.com/hairyhenderson/go-fsimpl/commit/93974dadf7fb158db106d553a850b5327ce489cd))
+* **go:** Bump github.com/aws/aws-sdk-go-v2/service/s3 ([#1061](https://github.com/hairyhenderson/go-fsimpl/issues/1061)) ([18b5bf2](https://github.com/hairyhenderson/go-fsimpl/commit/18b5bf26ca06158289271cfd0ef0b1d97935940b))
+* **go:** Bump github.com/Azure/azure-sdk-for-go/sdk/storage/azblob ([#1047](https://github.com/hairyhenderson/go-fsimpl/issues/1047)) ([d3de082](https://github.com/hairyhenderson/go-fsimpl/commit/d3de082910e565bfa9f27bbd69c08a6873505c78))
+* **go:** Bump github.com/hashicorp/consul/api in the hashicorp group ([#1053](https://github.com/hairyhenderson/go-fsimpl/issues/1053)) ([5692bdc](https://github.com/hairyhenderson/go-fsimpl/commit/5692bdc97d01c7312dfd6bce0342f144e0f20985))
+* **go:** Bump the aws-sdk group across 1 directory with 2 updates ([#1049](https://github.com/hairyhenderson/go-fsimpl/issues/1049)) ([c1e9709](https://github.com/hairyhenderson/go-fsimpl/commit/c1e9709023e0df02786f7250e7b96c8e699884e8))
+* **go:** Bump the otel group across 1 directory with 5 updates ([#1060](https://github.com/hairyhenderson/go-fsimpl/issues/1060)) ([d365973](https://github.com/hairyhenderson/go-fsimpl/commit/d365973fa32842b918f1507c87422838755f09ae))
+
+## [0.3.0](https://github.com/hairyhenderson/go-fsimpl/compare/v0.2.5...v0.3.0) (2025-04-20)
+
+
+### Features
+
+* New gcpmetafs filesystem ([#1032](https://github.com/hairyhenderson/go-fsimpl/issues/1032)) ([cfadbfb](https://github.com/hairyhenderson/go-fsimpl/commit/cfadbfb466828d30449bde749ad9f64beaa725f7))
+
+
+### Dependencies
+
+* **actions:** Bump actions/create-github-app-token in the actions group ([#1041](https://github.com/hairyhenderson/go-fsimpl/issues/1041)) ([28b08e6](https://github.com/hairyhenderson/go-fsimpl/commit/28b08e6bde3a16b70fe6309bc86cc401206dca0b))
+* **actions:** Bump aquasecurity/setup-trivy from 0.2.2 to 0.2.3 ([#1043](https://github.com/hairyhenderson/go-fsimpl/issues/1043)) ([5777c2f](https://github.com/hairyhenderson/go-fsimpl/commit/5777c2f7459ea4e7b83ffcc07f0692af5b8868c7))
+* **actions:** Bump golangci/golangci-lint-action from 6 to 7 ([#1035](https://github.com/hairyhenderson/go-fsimpl/issues/1035)) ([a6ea466](https://github.com/hairyhenderson/go-fsimpl/commit/a6ea466b05dda8cb6660dfedeacc8fb1a7b0e2cc))
+* **go:** Bump github.com/aws/aws-sdk-go-v2/service/secretsmanager ([#1046](https://github.com/hairyhenderson/go-fsimpl/issues/1046)) ([6277fa4](https://github.com/hairyhenderson/go-fsimpl/commit/6277fa4024885d2c43e2d665ecb3d30c54e62f0d))
+* **go:** Bump github.com/go-git/go-git/v5 from 5.15.0 to 5.16.0 ([#1045](https://github.com/hairyhenderson/go-fsimpl/issues/1045)) ([cb64fc3](https://github.com/hairyhenderson/go-fsimpl/commit/cb64fc316ba75a11851feea8b54db367cbb08ab6))
+* **go:** Bump github.com/golang-jwt/jwt/v5 in the go_modules group ([#1033](https://github.com/hairyhenderson/go-fsimpl/issues/1033)) ([8449c50](https://github.com/hairyhenderson/go-fsimpl/commit/8449c504375e97d8bba3854f603a35cd3d0a6645))
+* **go:** Bump github.com/hashicorp/consul/api in the hashicorp group ([#1038](https://github.com/hairyhenderson/go-fsimpl/issues/1038)) ([624bc8e](https://github.com/hairyhenderson/go-fsimpl/commit/624bc8e9eaf3025bee20b71a8643cc0fb470e087))
+* **go:** Bump gocloud.dev from 0.40.0 to 0.41.0 ([#1037](https://github.com/hairyhenderson/go-fsimpl/issues/1037)) ([591131e](https://github.com/hairyhenderson/go-fsimpl/commit/591131e50677ba2d09cb678b134750ea230fb098))
+* **go:** Bump golang.org/x/crypto in the golang-x group ([#1042](https://github.com/hairyhenderson/go-fsimpl/issues/1042)) ([e6f2a31](https://github.com/hairyhenderson/go-fsimpl/commit/e6f2a31ca94cbcabaeb9f7250d9a6ac1c03051b3))
+* **go:** Bump the aws-sdk group across 1 directory with 4 updates ([#1040](https://github.com/hairyhenderson/go-fsimpl/issues/1040)) ([5f3fb0b](https://github.com/hairyhenderson/go-fsimpl/commit/5f3fb0b9d66acecffd7baeb65c5e0277ade2ed40))
+* **go:** Switch back to upstream github.com/go-git/go-git/v5 module ([#1044](https://github.com/hairyhenderson/go-fsimpl/issues/1044)) ([896abf7](https://github.com/hairyhenderson/go-fsimpl/commit/896abf7136945260ddcf52165eb97fb63bb3a8b1))
+
+## [0.2.5](https://github.com/hairyhenderson/go-fsimpl/compare/v0.2.4...v0.2.5) (2025-03-14)
+
+
+### Bug Fixes
+
+* **httpfs:** Fall back to GET when HEAD not allowed on Stat ([#1031](https://github.com/hairyhenderson/go-fsimpl/issues/1031)) ([97ef3c0](https://github.com/hairyhenderson/go-fsimpl/commit/97ef3c0528bf33be916562a132c10aeb65c395d2))
+
+
+### Dependencies
+
+* **go:** Bump github.com/aws/aws-sdk-go-v2/service/s3 ([#1028](https://github.com/hairyhenderson/go-fsimpl/issues/1028)) ([e897108](https://github.com/hairyhenderson/go-fsimpl/commit/e897108f260fb945e76d2209efba63a241eb2e47))
+
+## [0.2.4](https://github.com/hairyhenderson/go-fsimpl/compare/v0.2.3...v0.2.4) (2025-03-10)
+
+
+### Bug Fixes
+
+* **perf:** Fix regression in pathForDirFS benchmark ([#1027](https://github.com/hairyhenderson/go-fsimpl/issues/1027)) ([cc55871](https://github.com/hairyhenderson/go-fsimpl/commit/cc558713dc47cf98a791887cbba4f8e475e3c8b1))
+
+
+### Dependencies
+
+* **go:** Upgrade to 1.24 and pull in outstanding upgrades ([#1025](https://github.com/hairyhenderson/go-fsimpl/issues/1025)) ([c001f6f](https://github.com/hairyhenderson/go-fsimpl/commit/c001f6f2965c3dc3273e465185380d105471bf60))
+
+## [0.2.3](https://github.com/hairyhenderson/go-fsimpl/compare/v0.2.2...v0.2.3) (2025-03-06)
+
+
+### Dependencies
+
+* **go:** Bump github.com/go-jose/go-jose/v4 in the go_modules group ([#1015](https://github.com/hairyhenderson/go-fsimpl/issues/1015)) ([5599993](https://github.com/hairyhenderson/go-fsimpl/commit/559999329df9c29b1ee7fa3793f67335bd1a7950))
+* **go:** Bump golang.org/x/crypto in the golang-x group ([#1019](https://github.com/hairyhenderson/go-fsimpl/issues/1019)) ([aa71e23](https://github.com/hairyhenderson/go-fsimpl/commit/aa71e23c51bda0c9c14ad34bb31f1e1a3e553b6f))
+* **go:** Bump the aws-sdk group across 1 directory with 6 updates ([#1022](https://github.com/hairyhenderson/go-fsimpl/issues/1022)) ([053af5f](https://github.com/hairyhenderson/go-fsimpl/commit/053af5f739024c273c12348d68dc7f0107f778d0))
+* **go:** Bump the otel group across 1 directory with 5 updates ([#1021](https://github.com/hairyhenderson/go-fsimpl/issues/1021)) ([d18de10](https://github.com/hairyhenderson/go-fsimpl/commit/d18de108437f5fa39f2b03e69009b753bde78a18))
+
+## [0.2.2](https://github.com/hairyhenderson/go-fsimpl/compare/v0.2.1...v0.2.2) (2025-02-23)
+
+
+### Bug Fixes
+
+* **ci:** add explicit permissions to benchmark workflow ([#1000](https://github.com/hairyhenderson/go-fsimpl/issues/1000)) ([d32cdf9](https://github.com/hairyhenderson/go-fsimpl/commit/d32cdf90d2838d31736510529678ae72f9622cc1))
+* **ci:** need contents write perm for benchmark workflow ([#1001](https://github.com/hairyhenderson/go-fsimpl/issues/1001)) ([3548a51](https://github.com/hairyhenderson/go-fsimpl/commit/3548a516c00c6c26391e295588e27e5da132172e))
+* **lint:** Address new lint warnings ([#996](https://github.com/hairyhenderson/go-fsimpl/issues/996)) ([e784bce](https://github.com/hairyhenderson/go-fsimpl/commit/e784bce35d41eb80923da46fc92516a4926cc155))
+
+
+### Dependencies
+
+* **go:** Bump github.com/aws/aws-sdk-go-v2/config from 1.28.6 to 1.29.7 ([#991](https://github.com/hairyhenderson/go-fsimpl/issues/991)) ([954a32e](https://github.com/hairyhenderson/go-fsimpl/commit/954a32e702917d3661e8c60847a3bd3527645581))
+* **go:** Bump github.com/aws/aws-sdk-go-v2/service/s3 ([#994](https://github.com/hairyhenderson/go-fsimpl/issues/994)) ([66c34ef](https://github.com/hairyhenderson/go-fsimpl/commit/66c34ef4a1067eff5782327ca8ab635ad12c9876))
+* **go:** Bump github.com/aws/aws-sdk-go-v2/service/secretsmanager ([#993](https://github.com/hairyhenderson/go-fsimpl/issues/993)) ([9444bcf](https://github.com/hairyhenderson/go-fsimpl/commit/9444bcfd096b6b126ced5d490ec324b9a3d6e100))
+* **go:** Bump github.com/aws/aws-sdk-go-v2/service/ssm ([#992](https://github.com/hairyhenderson/go-fsimpl/issues/992)) ([531f924](https://github.com/hairyhenderson/go-fsimpl/commit/531f924bcd348d8be59137b7efa65e153746425f))
+* **go:** Bump github.com/aws/smithy-go from 1.22.2 to 1.22.3 ([#1010](https://github.com/hairyhenderson/go-fsimpl/issues/1010)) ([040a287](https://github.com/hairyhenderson/go-fsimpl/commit/040a2872720eaa64d69b1a5410ff65478f8aec72))
+* **go:** Bump github.com/Azure/azure-sdk-for-go/sdk/storage/azblob ([#1012](https://github.com/hairyhenderson/go-fsimpl/issues/1012)) ([f249969](https://github.com/hairyhenderson/go-fsimpl/commit/f249969e50986eae6416ee94bed23be238578f40))
+* **go:** Bump github.com/fsouza/fake-gcs-server from 1.50.2 to 1.52.2 ([#987](https://github.com/hairyhenderson/go-fsimpl/issues/987)) ([f9b772f](https://github.com/hairyhenderson/go-fsimpl/commit/f9b772ff70dc60d1f23275995d5d298b86a10d60))
+* **go:** Bump github.com/go-git/go-billy/v5 from 5.6.0 to 5.6.2 ([#934](https://github.com/hairyhenderson/go-fsimpl/issues/934)) ([0f614b2](https://github.com/hairyhenderson/go-fsimpl/commit/0f614b23c31a8e36a997c59b651fff029b3de092))
+* **go:** Bump github.com/hashicorp/consul/api from 1.30.0 to 1.31.2 ([#990](https://github.com/hairyhenderson/go-fsimpl/issues/990)) ([dab2094](https://github.com/hairyhenderson/go-fsimpl/commit/dab209402162f42f313fe1ae2b171124afb9cde8))
+* **go:** Bump github.com/hashicorp/vault/api/auth/approle ([#1004](https://github.com/hairyhenderson/go-fsimpl/issues/1004)) ([fed7bda](https://github.com/hairyhenderson/go-fsimpl/commit/fed7bdaf9800521c551ad3095f5e72399ed124b8))
+* **go:** Bump github.com/hashicorp/vault/api/auth/userpass ([#1011](https://github.com/hairyhenderson/go-fsimpl/issues/1011)) ([70e8e61](https://github.com/hairyhenderson/go-fsimpl/commit/70e8e61ea9c3e76e0085a25fa9269fdfe2638d01))
+* **go:** Bump go.opentelemetry.io/contrib/propagators/autoprop ([#1007](https://github.com/hairyhenderson/go-fsimpl/issues/1007)) ([7eb66a6](https://github.com/hairyhenderson/go-fsimpl/commit/7eb66a64df5b3e8a294563930eb21877f114467f))
+* **go:** Bump go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc ([#1008](https://github.com/hairyhenderson/go-fsimpl/issues/1008)) ([4a0f82a](https://github.com/hairyhenderson/go-fsimpl/commit/4a0f82ac7cb6064629a2c3d0683449f0fa7a7d34))
+* **go:** Bump go.opentelemetry.io/otel/sdk from 1.33.0 to 1.34.0 ([#1003](https://github.com/hairyhenderson/go-fsimpl/issues/1003)) ([179f531](https://github.com/hairyhenderson/go-fsimpl/commit/179f5313c378a9d893e5e0d2ab0d114bdad630ba))
+* **go:** Bump golang.org/x/crypto from 0.32.0 to 0.34.0 ([#999](https://github.com/hairyhenderson/go-fsimpl/issues/999)) ([670bdfe](https://github.com/hairyhenderson/go-fsimpl/commit/670bdfe504c6ce737b95b8fb483c0a3ef68f637d))
+* **go:** Bump gotest.tools/v3 from 3.5.1 to 3.5.2 ([#1006](https://github.com/hairyhenderson/go-fsimpl/issues/1006)) ([0b8ddb7](https://github.com/hairyhenderson/go-fsimpl/commit/0b8ddb7cc03f827bffc5b06975320b75bb563dd7))
+
 ## [0.2.1](https://github.com/hairyhenderson/go-fsimpl/compare/v0.2.0...v0.2.1) (2024-12-17)
 
 

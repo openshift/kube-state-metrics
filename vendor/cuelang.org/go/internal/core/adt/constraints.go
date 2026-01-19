@@ -71,10 +71,6 @@ func (n *nodeContext) insertListEllipsis(offset int, ellipsis Conjunct) {
 // closeContext will be collated properly in fields to which these constraints
 // are applied.
 func (n *nodeContext) insertConstraint(pattern Value, c Conjunct) bool {
-	if c.CloseInfo.cc == nil {
-		panic("constraint conjunct must have closeContext associated with it")
-	}
-
 	ctx := n.ctx
 	v := n.node
 
@@ -101,9 +97,22 @@ func (n *nodeContext) insertConstraint(pattern Value, c Conjunct) bool {
 			Pattern:    pattern,
 			Constraint: constraint,
 		})
-	} else if constraint.hasConjunct(c) {
+	} else {
+		found := false
+		constraint.VisitLeafConjuncts(func(x Conjunct) bool {
+			if x.x == c.x && x.Env.Up == c.Env.Up && x.Env.Vertex == c.Env.Vertex {
+				src := x.CloseInfo.defID
+				dst := c.CloseInfo.defID
+				found = true
+				n.addReplacement(replaceID{from: dst, to: src, add: true})
+				return false
+			}
+			return true
+		})
 		// The constraint already existed and the conjunct was already added.
-		return false
+		if found {
+			return false
+		}
 	}
 
 	constraint.addConjunctUnchecked(c)
@@ -140,7 +149,7 @@ func matchPattern(ctx *OpContext, pattern Value, f Feature) bool {
 // for the majority of cases where pattern constraints are used.
 func matchPatternValue(ctx *OpContext, pattern Value, f Feature, label Value) (result bool) {
 	if v, ok := pattern.(*Vertex); ok {
-		v.unify(ctx, scalarKnown, finalize)
+		v.unify(ctx, scalarKnown, finalize, false)
 	}
 	pattern = Unwrap(pattern)
 	label = Unwrap(label)

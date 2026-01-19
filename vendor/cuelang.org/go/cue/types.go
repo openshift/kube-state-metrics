@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"slices"
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
@@ -33,7 +34,6 @@ import (
 	"cuelang.org/go/internal/core/adt"
 	"cuelang.org/go/internal/core/compile"
 	"cuelang.org/go/internal/core/convert"
-	"cuelang.org/go/internal/core/eval"
 	"cuelang.org/go/internal/core/export"
 	"cuelang.org/go/internal/core/runtime"
 	"cuelang.org/go/internal/core/subsume"
@@ -259,7 +259,9 @@ func (i *Iterator) Selector() Selector {
 // Label reports the label of the value if i iterates over struct fields and ""
 // otherwise.
 //
-// Deprecated: use [Iterator.Selector] and [Selector.String].
+// Deprecated: use [Iterator.Selector] with methods like
+// [Selector.Unquoted] or [Selector.String] depending on whether or not
+// you are only dealing with regular fields, whose labels are always [StringLabel].
 // Note that this will give more accurate string representations.
 func (i *hiddenIterator) Label() string {
 	if i.f == 0 {
@@ -603,7 +605,6 @@ func newValueRoot(idx *runtime.Runtime, ctx *adt.OpContext, x adt.Expr) Value {
 
 func newChildValue(o *structValue, i int) Value {
 	arc := o.at(i)
-	// TODO: fix linkage to parent.
 	return makeValue(o.v.idx, arc, linkParent(o.v.parent_, o.v.v, arc))
 }
 
@@ -683,7 +684,7 @@ func remakeValue(base Value, env *adt.Environment, v adt.Expr) Value {
 	return makeChildValue(base.parent(), n)
 }
 
-func remakeFinal(base Value, env *adt.Environment, v adt.Value) Value {
+func remakeFinal(base Value, v adt.Value) Value {
 	n := &adt.Vertex{Parent: base.v.Parent, Label: base.v.Label, BaseValue: v}
 	n.ForceDone()
 	return makeChildValue(base.parent(), n)
@@ -714,11 +715,13 @@ func (v Value) Default() (Value, bool) {
 		return v, false
 	}
 
-	d := v.v.Default()
+	x := v.v.DerefValue()
+	d := x.Default()
+	isDefault := d != x
 	if d == v.v {
 		return v, false
 	}
-	return makeValue(v.idx, d, v.parent_), true
+	return makeValue(v.idx, d, v.parent_), isDefault
 }
 
 // Label reports he label used to obtain this value from the enclosing struct.
@@ -757,8 +760,7 @@ func (v Value) IncompleteKind() Kind {
 
 // MarshalJSON marshalls this value into valid JSON.
 func (v Value) MarshalJSON() (b []byte, err error) {
-	ctx := newContext(v.idx)
-	b, err = v.appendJSON(ctx, nil)
+	b, err = v.appendJSON(v.ctx(), nil)
 	if err != nil {
 		return nil, unwrapJSONError(err)
 	}
@@ -787,11 +789,14 @@ func (v Value) appendJSON(ctx *adt.OpContext, b []byte) ([]byte, error) {
 		b2, err := json.Marshal(x.(*adt.Bool).B)
 		return append(b, b2...), err
 	case adt.IntKind, adt.FloatKind, adt.NumberKind:
-		// TODO(mvdan): MarshalText does not guarantee valid JSON,
-		// but apd.Decimal does not expose a MarshalJSON method either.
-		b2, err := x.(*adt.Num).X.MarshalText()
-		b2 = bytes.TrimLeft(b2, "+")
-		return append(b, b2...), err
+		// [apd.Decimal] offers no [json.Marshaler] method,
+		// however the "G" formatting appears to result in valid JSON
+		// for any valid CUE number that we've come across so far.
+		// Upstream also rejected adding JSON methods in favor of [encoding.TextMarshaler].
+		//
+		// As an optimization, use the append-like API directly which is equivalent to
+		// [apd.Decimal.MarshalText], allowing us to avoid extra copies.
+		return x.(*adt.Num).X.Append(b, 'G'), nil
 	case adt.StringKind:
 		// Do not use json.Marshal as it escapes HTML.
 		b2, err := internaljson.Marshal(x.(*adt.String).Str)
@@ -893,12 +898,21 @@ outer:
 
 	if len(f.Decls) == 1 {
 		if e, ok := f.Decls[0].(*ast.EmbedDecl); ok {
+			for _, c := range ast.Comments(e) {
+				ast.AddComment(f, c)
+			}
+			for _, c := range ast.Comments(e.Expr) {
+				ast.AddComment(f, c)
+			}
+			ast.SetComments(e.Expr, f.Comments())
 			return e.Expr
 		}
 	}
-	return &ast.StructLit{
+	st := &ast.StructLit{
 		Elts: f.Decls,
 	}
+	ast.SetComments(st, f.Comments())
+	return st
 }
 
 // Doc returns all documentation comments associated with the field from which
@@ -982,25 +996,6 @@ func (v Value) Pos() token.Pos {
 }
 
 // TODO: IsFinal: this value can never be changed.
-
-// IsClosed reports whether a list or struct is closed. It reports false when
-// the value is not a list or struct.
-//
-// Deprecated: use Allows(AnyString) and Allows(AnyIndex) or Kind/IncompleteKind.
-func (v hiddenValue) IsClosed() bool {
-	if v.v == nil {
-		return false
-	}
-	switch v.Kind() {
-	case ListKind:
-		return v.v.IsClosedList()
-	case StructKind:
-		// TODO: remove this more expensive computation once the old evaluator
-		// is removed.
-		return !v.Allows(AnyString)
-	}
-	return false
-}
 
 // Allows reports whether a field with the given selector could be added to v.
 //
@@ -1101,8 +1096,8 @@ func (v Value) checkKind(ctx *adt.OpContext, want adt.Kind) *adt.Bottom {
 
 func makeInt(v Value, x int64) Value {
 	n := &adt.Num{K: adt.IntKind}
-	n.X.SetInt64(int64(x))
-	return remakeFinal(v, nil, n)
+	n.X.SetInt64(x)
+	return remakeFinal(v, n)
 }
 
 // Len returns the number of items of the underlying value.
@@ -1116,7 +1111,7 @@ func (v Value) Len() Value {
 				n := &adt.Num{K: adt.IntKind}
 				n.X.SetInt64(int64(len(x.Elems())))
 				if x.IsClosedList() {
-					return remakeFinal(v, nil, n)
+					return remakeFinal(v, n)
 				}
 				// Note: this HAS to be a Conjunction value and cannot be
 				// an adt.BinaryExpr, as the expressions would be considered
@@ -1126,7 +1121,7 @@ func (v Value) Len() Value {
 					&adt.BasicType{K: adt.IntKind},
 					&adt.BoundValue{Op: adt.GreaterEqualOp, Value: n},
 				}}
-				return remakeFinal(v, nil, c)
+				return remakeFinal(v, c)
 
 			}
 		case *adt.Bytes:
@@ -1253,6 +1248,7 @@ func (v Value) structValData(ctx *adt.OpContext) (structValue, *adt.Bottom) {
 
 // structVal returns an structVal or an error if v is not a struct.
 func (v Value) structValOpts(ctx *adt.OpContext, o options) (s structValue, err *adt.Bottom) {
+	orig := v
 	v, _ = v.Default()
 
 	obj := v.v
@@ -1309,7 +1305,7 @@ func (v Value) structValOpts(ctx *adt.OpContext, o options) (s structValue, err 
 		}
 		arcs = append(arcs, arc)
 	}
-	return structValue{ctx, v, obj, arcs}, nil
+	return structValue{ctx, orig, obj, arcs}, nil
 }
 
 // Struct returns the underlying struct of a value or an error if the value
@@ -1339,7 +1335,7 @@ type hiddenStruct = Struct
 // Deprecated: only used by deprecated functions.
 type FieldInfo struct {
 	Selector string
-	Name     string // Deprecated: use Selector
+	Name     string // Deprecated: use [FieldInfo.Selector]
 	Pos      int
 	Value    Value
 
@@ -1586,8 +1582,8 @@ func (v Value) FillPath(p Path, x interface{}) Value {
 	default:
 		expr = convert.GoValueToValue(ctx, x, true)
 	}
-	for i := len(p.path) - 1; i >= 0; i-- {
-		switch sel := p.path[i]; sel.Type() {
+	for _, sel := range slices.Backward(p.path) {
+		switch sel.Type() {
 		case StringLabel | PatternConstraint:
 			expr = &adt.StructLit{Decls: []adt.Decl{
 				&adt.BulkOptionalField{
@@ -1693,6 +1689,8 @@ func (v Value) Subsume(w Value, opts ...Option) error {
 	return p.Value(ctx, v.v, w.v)
 }
 
+// TODO: this is likely not correct for V3. There are some cases where this is
+// still used for V3. Transition away from those.
 func allowed(ctx *adt.OpContext, parent, n *adt.Vertex) *adt.Bottom {
 	if !parent.IsClosedList() && !parent.IsClosedStruct() {
 		return nil
@@ -1709,15 +1707,6 @@ func allowed(ctx *adt.OpContext, parent, n *adt.Vertex) *adt.Bottom {
 	return nil
 }
 
-func addConjuncts(dst, src *adt.Vertex) {
-	c := adt.MakeRootConjunct(nil, src)
-	if src.ClosedRecursive {
-		var root adt.CloseInfo
-		c.CloseInfo = root.SpawnRef(src, src.ClosedRecursive, nil)
-	}
-	dst.AddConjunct(c)
-}
-
 // Unify reports the greatest lower bound of v and w.
 //
 // Value v and w must be obtained from the same build.
@@ -1730,25 +1719,21 @@ func (v Value) Unify(w Value) Value {
 		return v
 	}
 
-	n := &adt.Vertex{}
-	addConjuncts(n, v.v)
-	addConjuncts(n, w.v)
+	ctx := v.ctx()
+	defer ctx.PopArc(ctx.PushArc(v.v))
 
-	ctx := newContext(v.idx)
-	n.Finalize(ctx)
+	n := adt.Unify(ctx, v.v, w.v)
 
-	n.Parent = v.v.Parent
-	n.Label = v.v.Label
-	n.ClosedRecursive = v.v.ClosedRecursive || w.v.ClosedRecursive
-
-	if err := n.Err(ctx); err != nil {
-		return makeValue(v.idx, n, v.parent_)
-	}
-	if err := allowed(ctx, v.v, n); err != nil {
-		return newErrValue(w, err)
-	}
-	if err := allowed(ctx, w.v, n); err != nil {
-		return newErrValue(v, err)
+	if ctx.Version == internal.EvalV2 {
+		if err := n.Err(ctx); err != nil {
+			return makeValue(v.idx, n, v.parent_)
+		}
+		if err := allowed(ctx, v.v, n); err != nil {
+			return newErrValue(w, err)
+		}
+		if err := allowed(ctx, w.v, n); err != nil {
+			return newErrValue(v, err)
+		}
 	}
 
 	return makeValue(v.idx, n, v.parent_)
@@ -1771,10 +1756,20 @@ func (v Value) UnifyAccept(w Value, accept Value) Value {
 	}
 
 	n := &adt.Vertex{}
-	n.AddConjunct(adt.MakeRootConjunct(nil, v.v))
-	n.AddConjunct(adt.MakeRootConjunct(nil, w.v))
+	ctx := v.ctx()
 
-	ctx := newContext(v.idx)
+	switch ctx.Version {
+	case internal.EvalV2:
+		cv := adt.MakeRootConjunct(nil, v.v)
+		cw := adt.MakeRootConjunct(nil, w.v)
+
+		n.AddConjunct(cv)
+		n.AddConjunct(cw)
+
+	case internal.EvalV3:
+		n.AddOpenConjunct(ctx, v.v)
+		n.AddOpenConjunct(ctx, w.v)
+	}
 	n.Finalize(ctx)
 
 	n.Parent = v.v.Parent
@@ -1898,6 +1893,7 @@ func reference(rt *runtime.Runtime, c *adt.OpContext, env *adt.Environment, r ad
 	if inst == nil {
 		return nil, nil
 	}
+	inst.Finalize(c)
 	return inst, path
 }
 
@@ -1952,7 +1948,7 @@ func Schema() Option {
 
 // Concrete ensures that all values are concrete.
 //
-// For Validate this means it returns an error if this is not the case.
+// For [Value.Validate] this means it returns an error if this is not the case.
 // In other cases a non-concrete value will be replaced with an error.
 func Concrete(concrete bool) Option {
 	return func(p *options) {
@@ -2268,7 +2264,7 @@ process:
 					a.AddConjunct(adt.MakeRootConjunct(env, n.Val))
 					b.AddConjunct(adt.MakeRootConjunct(env, disjunct.Val))
 
-					ctx := eval.NewContext(v.idx, nil)
+					ctx := v.ctx()
 					a.Finalize(ctx)
 					b.Finalize(ctx)
 					if allowed(ctx, v.v, &b) != nil {

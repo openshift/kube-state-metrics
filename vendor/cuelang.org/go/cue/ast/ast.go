@@ -301,13 +301,15 @@ func (a *Attribute) Split() (key, body string) {
 
 // A Field represents a field declaration in a struct.
 type Field struct {
-	Label      Label       // must have at least one element.
-	Optional   token.Pos   // Deprecated
+	Label Label // must have at least one element.
+	// Deprecated: use [Field.Constraint]
+	Optional   token.Pos
 	Constraint token.Token // token.ILLEGAL, token.OPTION, or token.NOT
 
 	// No TokenPos: Value must be an StructLit with one field.
 	TokenPos token.Pos
-	Token    token.Token // Deprecated: always token.COLON
+	// Deprecated: the value is always [token.COLON]
+	Token token.Token
 
 	Value Expr // the value associated with this field.
 
@@ -945,10 +947,6 @@ func (d *EmbedDecl) End() token.Pos { return d.Expr.End() }
 // Files and packages
 
 // A File node represents a CUE source file.
-//
-// The Comments list contains all comments in the source file in order of
-// appearance, including the comments that are pointed to from other nodes
-// via Doc and Comment fields.
 type File struct {
 	Filename string
 	Decls    []Decl // top-level declarations; or nil

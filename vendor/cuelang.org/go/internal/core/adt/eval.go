@@ -142,7 +142,7 @@ func (c *OpContext) evaluate(v *Vertex, r Resolver, state combinedFlags) Value {
 		// relax this again once we have proper tests to prevent regressions of
 		// that issue.
 		if !v.state.done() || v.state.errs != nil {
-			v.state.addNotify(c.vertex, nil)
+			v.state.addNotify(c.vertex)
 		}
 	}
 
@@ -157,7 +157,7 @@ func (c *OpContext) evaluate(v *Vertex, r Resolver, state combinedFlags) Value {
 func (c *OpContext) unify(v *Vertex, flags combinedFlags) {
 	if c.isDevVersion() {
 		requires, mode := flags.conditions(), flags.runMode()
-		v.unify(c, requires, mode)
+		v.unify(c, requires, mode, true)
 		return
 	}
 
@@ -809,10 +809,6 @@ func (n *nodeContext) checkClosed(state vertexStatus) bool {
 func (n *nodeContext) completeArcs(state vertexStatus) {
 	unreachableForDev(n.ctx)
 
-	if DebugSort > 0 {
-		DebugSortArcs(n.ctx, n.node)
-	}
-
 	if n.node.hasAllConjuncts || n.node.Parent == nil {
 		n.node.setParentDone()
 	}
@@ -864,6 +860,12 @@ func (n *nodeContext) completeArcs(state vertexStatus) {
 				}
 			}
 
+			// If a structural cycle is detected, Arcs is cleared to avoid
+			// going into an infinite loop. If this is the case, we can bail
+			// from this loop.
+			if len(n.node.Arcs) == 0 {
+				goto postChecks
+			}
 			n.node.Arcs[k] = a
 			k++
 
@@ -893,6 +895,7 @@ func (n *nodeContext) completeArcs(state vertexStatus) {
 		}
 		n.node.Arcs = n.node.Arcs[:k]
 
+	postChecks:
 		for _, c := range n.postChecks {
 			f := ctx.PushState(c.env, c.expr.Source())
 
@@ -1016,13 +1019,13 @@ type nodeContext struct {
 	// for source-level debuggers.
 	node *Vertex
 
+	// parent keeps track of the parent Vertex in which a Vertex is being
+	// evaluated. This is to keep track of the full path in error messages.
+	parent *Vertex
+
 	// underlying is the original Vertex that this node overlays. It should be
 	// set for all Vertex values that were cloned.
 	underlying *Vertex
-
-	// overlays is set if this node is the root of a disjunct created in
-	// doDisjunct. It points to the direct parent nodeContext.
-	overlays *nodeContext
 
 	nodeContextState
 
@@ -1035,9 +1038,19 @@ type nodeContext struct {
 
 	arcMap []arcKey // not copied for cloning
 
+	// vertexMap is used to map vertices in disjunctions.
+	vertexMap vertexMap
+
 	// notify is used to communicate errors in cyclic dependencies.
 	// TODO: also use this to communicate increasingly more concrete values.
 	notify []receiver
+
+	// sharedIDs contains all the CloseInfos that are involved in a shared node.
+	// There can be more than one if the same Vertex is shared multiple times.
+	// It is important to keep track of each instance as we need to insert each
+	// of them separately in case a Vertex is "unshared" to ensure that
+	// closedness information is correctly computed in such cases.
+	sharedIDs []CloseInfo
 
 	// Conjuncts holds a reference to the Vertex Arcs that still need
 	// processing. It does NOT need to be copied.
@@ -1053,6 +1066,12 @@ type nodeContext struct {
 	vLists []*Vertex
 	exprs  []envExpr
 
+	// These fields are used to track type checking.
+	reqDefIDs    []refInfo
+	replaceIDs   []replaceID
+	conjunctInfo []conjunctInfo
+	reqSets      reqSets
+
 	// Checks is a list of conjuncts, as we need to preserve the context in
 	// which it was evaluated. The conjunct is always a validator (and thus
 	// a Value). We need to keep track of the CloseInfo, however, to be able
@@ -1065,16 +1084,6 @@ type nodeContext struct {
 	// Disjunction handling
 	disjunctions []envDisjunct
 
-	// disjunctCCs holds the close context that represent "holes" in which
-	// pending disjuncts are to be inserted for the clone represented by this
-	// nodeContext. Holes that are not yet filled will always need to be cloned
-	// when a disjunction branches in doDisjunct.
-	//
-	// Holes may accumulate as nested disjunctions get added and filled holes
-	// may be removed. So the list of disjunctCCs may differ from the number
-	// of disjunctions.
-	disjunctCCs []disjunctHole
-
 	// usedDefault indicates the for each of possibly multiple parent
 	// disjunctions whether it is unified with a default disjunct or not.
 	// This is then later used to determine whether a disjunction should
@@ -1086,7 +1095,11 @@ type nodeContext struct {
 	disjuncts    []*nodeContext
 	buffer       []*nodeContext
 	disjunctErrs []*Bottom
-	disjunct     Conjunct
+
+	// hasDisjunction marks wither any disjunct was added. It is listed here
+	// instead of in nodeContextState as it should be cleared when a disjunction
+	// is split off. TODO: find something more principled.
+	hasDisjunction bool
 
 	// snapshot holds the last value of the vertex before calling postDisjunct.
 	snapshot Vertex
@@ -1141,14 +1154,75 @@ type nodeContextState struct {
 	hasNonCycle          bool // has material conjuncts without structural cycle
 	hasNonCyclic         bool // has non-cyclic conjuncts at start of field processing
 
-	isShared      bool      // set if we are currently structure sharing.
-	noSharing     bool      // set if structure sharing is not allowed
-	shared        Conjunct  // the original conjunct that led to sharing
-	sharedID      CloseInfo // the original CloseInfo that led to sharing
-	origBaseValue BaseValue // the BaseValue that structure sharing replaces.
+	// These simulate the old closeContext logic. TODO: perhaps remove.
+	hasStruct        bool // this node has a struct conjunct
+	hasOpenValidator bool // this node has an open validator
+	isDef            bool // this node is a definition
 
-	depth       int32
-	defaultMode defaultMode
+	dropParentRequirements bool // used for typo checking
+	computedCloseInfo      bool // used for typo checking
+
+	isShared         bool       // set if we are currently structure sharing
+	noSharing        bool       // set if structure sharing is not allowed
+	shared           Conjunct   // the original conjunct that led to sharing
+	shareCycleType   CyclicType // keeps track of the cycle type of shared nodes
+	origBaseValue    BaseValue  // the BaseValue that structure sharing replaces
+	shareDecremented bool       // counters of sharedIDs have been decremented
+
+	depth           int32
+	defaultMode     defaultMode // cumulative default mode
+	origDefaultMode defaultMode // default mode of the original disjunct
+
+	// has a value filled out before the node splits into a disjunction. Aside
+	// from detecting a self-reference cycle when there is otherwise just an
+	// other error, this field is not needed. It greatly helps, however, to
+	// improve the error messages.
+	hasFieldValue bool
+
+	// defaultAttemptInCycle indicates that a value relies on the default value
+	// and that it will be an error to remove the default value from the
+	// disjunction. It is set to the referring Vertex. Consider for instance:
+	//
+	//      a: 1 - b
+	//      b: 1 - a
+	//      a: *0 | 1
+	//      b: *0 | 1
+	//
+	// versus
+	//
+	//      a: 1 - b
+	//      b: 1 - a
+	//      a: *1 | 0
+	//      b: *0 | 1
+	//
+	// In both cases there are multiple solutions to the configuration. In the
+	// first case there is an ambiguity: if we start with evaluating 'a' and
+	// pick the default for 'b', we end up with a value of '1' for 'a'. If,
+	// conversely, we start evaluating 'b' and pick the default for 'a', we end
+	// up with {a: 0, b: 0}. In the seconds case, however, we do _will_ get the
+	// same answer regardless of order.
+	//
+	// In general, we will allow expressions on cyclic paths to be resolved if
+	// in all cases the default value is taken. In order to do that, we do not
+	// allow a default value to be removed from a disjunction if such value is
+	// depended on.
+	//
+	// For completeness, note that CUE will NOT solve a solution, even if there
+	// is only one solution. Consider for instance:
+	//
+	//      a: 0 | 1
+	//      a: b + 1
+	//      b: c - 1
+	//      c: a - 1
+	//      c: 1 | 2
+	//
+	// There the only consistent solution is {a: 1, b: 0, c: 1}. CUE, however,
+	// will not attempt this solve this as, in general, such solving would be NP
+	// complete.
+	//
+	// NOTE(evalv4): note that this would be easier if we got rid of default
+	// values and had pre-selected overridable values instead.
+	defaultAttemptInCycle *Vertex
 
 	// Value info
 
@@ -1184,9 +1258,10 @@ type nodeContextState struct {
 }
 
 // A receiver receives notifications.
+// cc is used for V3 and is nil in V2.
+// v is equal to cc.src._cc in V3.
 type receiver struct {
-	v  *Vertex
-	cc *closeContext
+	v *Vertex
 }
 
 // Logf substitutes args in format. Arguments of type Feature, Value, and Expr
@@ -1207,11 +1282,11 @@ type defaultInfo struct {
 	origMode defaultMode
 }
 
-func (n *nodeContext) addNotify(v *Vertex, cc *closeContext) {
+func (n *nodeContext) addNotify(v *Vertex) {
 	unreachableForDev(n.ctx)
 
 	if v != nil && !n.node.hasAllConjuncts {
-		n.notify = append(n.notify, receiver{v, cc})
+		n.notify = append(n.notify, receiver{v})
 	}
 }
 
@@ -1227,6 +1302,7 @@ func (n *nodeContext) clone() *nodeContext {
 
 	d.arcMap = append(d.arcMap, n.arcMap...)
 	d.notify = append(d.notify, n.notify...)
+	d.sharedIDs = append(d.sharedIDs, n.sharedIDs...)
 
 	n.scheduler.cloneInto(&d.scheduler)
 
@@ -1238,6 +1314,12 @@ func (n *nodeContext) clone() *nodeContext {
 	d.lists = append(d.lists, n.lists...)
 	d.vLists = append(d.vLists, n.vLists...)
 	d.exprs = append(d.exprs, n.exprs...)
+
+	d.reqDefIDs = append(d.reqDefIDs, n.reqDefIDs...)
+	d.replaceIDs = append(d.replaceIDs, n.replaceIDs...)
+	d.conjunctInfo = append(d.conjunctInfo, n.conjunctInfo...)
+	d.reqSets = append(d.reqSets, n.reqSets...)
+
 	d.checks = append(d.checks, n.checks...)
 	d.postChecks = append(d.postChecks, n.postChecks...)
 
@@ -1264,6 +1346,7 @@ func (c *OpContext) newNodeContext(node *Vertex) *nodeContext {
 			conjuncts:          n.conjuncts[:0],
 			cyclicConjuncts:    n.cyclicConjuncts[:0],
 			notify:             n.notify[:0],
+			sharedIDs:          n.sharedIDs[:0],
 			checks:             n.checks[:0],
 			postChecks:         n.postChecks[:0],
 			dynamicFields:      n.dynamicFields[:0],
@@ -1272,8 +1355,11 @@ func (c *OpContext) newNodeContext(node *Vertex) *nodeContext {
 			lists:              n.lists[:0],
 			vLists:             n.vLists[:0],
 			exprs:              n.exprs[:0],
+			reqDefIDs:          n.reqDefIDs[:0],
+			replaceIDs:         n.replaceIDs[:0],
+			conjunctInfo:       n.conjunctInfo[:0],
+			reqSets:            n.reqSets[:0],
 			disjunctions:       n.disjunctions[:0],
-			disjunctCCs:        n.disjunctCCs[:0],
 			usedDefault:        n.usedDefault[:0],
 			disjunctErrs:       n.disjunctErrs[:0],
 			disjuncts:          n.disjuncts[:0],
@@ -1425,6 +1511,8 @@ func (n *nodeContext) reportFieldMismatch(
 }
 
 func (n *nodeContext) updateNodeType(k Kind, v Expr, id CloseInfo) bool {
+	n.updateConjunctInfo(k, id, 0)
+
 	ctx := n.ctx
 	kind := n.kind & k
 
@@ -1839,7 +1927,8 @@ func (n *nodeContext) addVertexConjuncts(c Conjunct, arc *Vertex, inline bool) {
 	// in case an API does many calls to Unify.
 	x := c.Expr()
 	if !inline || arc.IsClosedStruct() || arc.IsClosedList() {
-		closeInfo = closeInfo.SpawnRef(arc, IsDef(x), x)
+		isDef, _ := IsDef(x)
+		closeInfo = closeInfo.SpawnRef(arc, isDef, x)
 	}
 
 	if arc.status == unprocessed && !inline {
@@ -1858,7 +1947,7 @@ func (n *nodeContext) addVertexConjuncts(c Conjunct, arc *Vertex, inline bool) {
 	}
 
 	if arc.state != nil {
-		arc.state.addNotify(n.node, nil)
+		arc.state.addNotify(n.node)
 	}
 
 	for _, c := range arc.Conjuncts {
@@ -1938,6 +2027,9 @@ func (n *nodeContext) addValueConjunct(env *Environment, v Value, id CloseInfo) 
 
 	switch b := v.(type) {
 	case *Bottom:
+		if b == NoShareSentinel {
+			return
+		}
 		n.addBottom(b)
 		return
 	case *Builtin:
@@ -1970,13 +2062,13 @@ func (n *nodeContext) addValueConjunct(env *Environment, v Value, id CloseInfo) 
 		switch x.Op {
 		case LessThanOp, LessEqualOp:
 			if y := n.upperBound; y != nil {
-				n.upperBound = nil
 				v := SimplifyBounds(ctx, n.kind, x, y)
 				if err := valueError(v); err != nil {
 					err.AddPosition(v)
 					err.AddPosition(n.upperBound)
 					err.AddClosedPositions(id)
 				}
+				n.upperBound = nil
 				n.addValueConjunct(env, v, id)
 				return
 			}
@@ -1984,13 +2076,13 @@ func (n *nodeContext) addValueConjunct(env *Environment, v Value, id CloseInfo) 
 
 		case GreaterThanOp, GreaterEqualOp:
 			if y := n.lowerBound; y != nil {
-				n.lowerBound = nil
 				v := SimplifyBounds(ctx, n.kind, x, y)
 				if err := valueError(v); err != nil {
 					err.AddPosition(v)
 					err.AddPosition(n.lowerBound)
 					err.AddClosedPositions(id)
 				}
+				n.lowerBound = nil
 				n.addValueConjunct(env, v, id)
 				return
 			}
@@ -2153,7 +2245,6 @@ func (n *nodeContext) addStruct(
 			// TODO(perf): only do this if addExprConjunct below will result in
 			// a fieldSet. Otherwise the entry will just be removed next.
 			id := closeInfo.SpawnEmbed(x)
-			id.decl = x
 
 			c := MakeConjunct(childEnv, x, id)
 			n.addExprConjunct(c, partial)

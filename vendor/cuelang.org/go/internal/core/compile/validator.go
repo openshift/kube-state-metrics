@@ -30,7 +30,10 @@ var matchNBuiltin = &adt.Builtin{
 	Params:      []adt.Param{topParam, intParam, listParam}, // varargs
 	Result:      adt.BoolKind,
 	NonConcrete: true,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		if !c.IsValidator {
 			return c.NewErrf("matchN is a validator and should not be used as a function")
 		}
@@ -40,16 +43,19 @@ var matchNBuiltin = &adt.Builtin{
 			return &adt.Bool{B: false}
 		}
 
+		var errs []*adt.Bottom
+
 		constraints := c.Elems(args[2])
 
 		var count, possibleCount int64
 		for _, check := range constraints {
-			v := unifyValidator(c, self, check)
+			v := adt.Unify(c, self, check)
 			if err := validate.Validate(c, v, finalCfg); err == nil {
 				// TODO: is it always true that the lack of an error signifies
 				// success?
 				count++
 			} else {
+				errs = append(errs, err)
 				if err.IsIncomplete() {
 					possibleCount++
 				}
@@ -62,6 +68,14 @@ var matchNBuiltin = &adt.Builtin{
 
 		b := checkNum(c, bound, count, count+possibleCount)
 		if b != nil {
+			// Only show errors related to incomplete schema if there is still
+			// a possibility that we can resolve it.
+			isIncomplete := b.IsIncomplete()
+			for _, err := range errs {
+				if !isIncomplete || err.IsIncomplete() {
+					c.AddBottom(err)
+				}
+			}
 			return b
 		}
 		return &adt.Bool{B: true}
@@ -78,7 +92,10 @@ var matchIfBuiltin = &adt.Builtin{
 	Params:      []adt.Param{topParam, topParam, topParam, topParam},
 	Result:      adt.BoolKind,
 	NonConcrete: true,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		if !c.IsValidator {
 			return c.NewErrf("matchIf is a validator and should not be used as a function")
 		}
@@ -88,14 +105,14 @@ var matchIfBuiltin = &adt.Builtin{
 			return &adt.Bool{B: false}
 		}
 		ifSchema, thenSchema, elseSchema := args[1], args[2], args[3]
-		v := unifyValidator(c, self, ifSchema)
+		v := adt.Unify(c, self, ifSchema)
 		var chosenSchema adt.Value
 		if err := validate.Validate(c, v, finalCfg); err == nil {
 			chosenSchema = thenSchema
 		} else {
 			chosenSchema = elseSchema
 		}
-		v = unifyValidator(c, self, chosenSchema)
+		v = adt.Unify(c, self, chosenSchema)
 		err := validate.Validate(c, v, finalCfg)
 		if err == nil {
 			return &adt.Bool{B: true}
@@ -117,7 +134,8 @@ func finalizeSelf(c *adt.OpContext, self adt.Value) adt.Value {
 	return self
 }
 
-func unifyValidator(c *adt.OpContext, self, check adt.Value) *adt.Vertex {
+// TODO: use adt.Unify instead.
+func unifyScalar(c *adt.OpContext, self, check adt.Value) *adt.Vertex {
 	v := &adt.Vertex{}
 	closeInfo := c.CloseInfo()
 	v.AddConjunct(adt.MakeConjunct(nil, self, closeInfo))
@@ -128,7 +146,7 @@ func unifyValidator(c *adt.OpContext, self, check adt.Value) *adt.Vertex {
 
 func checkNum(ctx *adt.OpContext, bound adt.Value, count, maxCount int64) *adt.Bottom {
 	cnt := ctx.NewInt64(count)
-	n := unifyValidator(ctx, bound, cnt)
+	n := unifyScalar(ctx, bound, cnt)
 	b, _ := n.BaseValue.(*adt.Bottom)
 	if b != nil {
 		b := ctx.NewErrf("%d matched, expected %v", count, bound)
