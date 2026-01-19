@@ -61,6 +61,43 @@ var (
 func deploymentMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generator.FamilyGenerator {
 	return []generator.FamilyGenerator{
 		*generator.NewFamilyGeneratorWithStability(
+			"kube_deployment_owner",
+			"Information about the Deployment's owner.",
+			metric.Gauge,
+			basemetrics.ALPHA,
+			"",
+			wrapDeploymentFunc(func(d *v1.Deployment) *metric.Family {
+				labelKeys := []string{"owner_kind", "owner_name"}
+
+				owners := d.GetOwnerReferences()
+				if len(owners) == 0 {
+					return &metric.Family{
+						Metrics: []*metric.Metric{
+							{
+								LabelKeys:   labelKeys,
+								LabelValues: []string{"", ""},
+								Value:       1,
+							},
+						},
+					}
+				}
+
+				ms := make([]*metric.Metric, len(owners))
+
+				for i, owner := range owners {
+					ms[i] = &metric.Metric{
+						LabelKeys:   labelKeys,
+						LabelValues: []string{owner.Kind, owner.Name},
+						Value:       1,
+					}
+				}
+
+				return &metric.Family{
+					Metrics: ms,
+				}
+			}),
+		),
+		*generator.NewFamilyGeneratorWithStability(
 			"kube_deployment_created",
 			"Unix creation timestamp",
 			metric.Gauge,
@@ -157,6 +194,26 @@ func deploymentMetricFamilies(allowAnnotationsList, allowLabelsList []string) []
 							Value: float64(d.Status.UpdatedReplicas),
 						},
 					},
+				}
+			}),
+		),
+		*generator.NewFamilyGeneratorWithStability(
+			"kube_deployment_status_terminating_replicas",
+			"The number of terminating replicas per deployment.",
+			metric.Gauge,
+			basemetrics.ALPHA,
+			"",
+			wrapDeploymentFunc(func(r *v1.Deployment) *metric.Family {
+				ms := []*metric.Metric{}
+
+				if r.Status.TerminatingReplicas != nil {
+					ms = append(ms, &metric.Metric{
+						Value: float64(*r.Status.TerminatingReplicas),
+					})
+				}
+
+				return &metric.Family{
+					Metrics: ms,
 				}
 			}),
 		),

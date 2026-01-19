@@ -63,6 +63,10 @@ import (
 	"k8s.io/kube-state-metrics/v2/pkg/util/proc"
 )
 
+// ClientGoVersion is the version for the client-go library used by KSM. This
+// value is set at build time using go build flags.
+var ClientGoVersion = "unknown"
+
 const (
 	metricsPath = "/metrics"
 	healthzPath = "/healthz"
@@ -85,7 +89,10 @@ func RunKubeStateMetricsWrapper(ctx context.Context, opts *options.Options) erro
 // which implements customresource.RegistryFactory and pass all factories into this function.
 func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 	ksmMetricsRegistry := prometheus.NewRegistry()
-	ksmMetricsRegistry.MustRegister(versionCollector.NewCollector("kube_state_metrics"))
+	ksmMetricsRegistry.MustRegister(versionCollector.NewCollector("kube_state_metrics", versionCollector.WithExtraConstLabels(
+		prometheus.Labels{"client_go_version": ClientGoVersion},
+	)))
+
 	durationVec := promauto.With(ksmMetricsRegistry).NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:        "http_request_duration_seconds",
@@ -114,6 +121,10 @@ func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 	crdsAddEventsCounter := promauto.With(ksmMetricsRegistry).NewCounter(prometheus.CounterOpts{
 		Name: "kube_state_metrics_custom_resource_state_add_events_total",
 		Help: "Number of times that the CRD informer triggered the add event.",
+	})
+	crdsUpdateEventsCounter := promauto.With(ksmMetricsRegistry).NewCounter(prometheus.CounterOpts{
+		Name: "kube_state_metrics_custom_resource_state_update_events_total",
+		Help: "Number of times that the CRD informer triggered the update event.",
 	})
 	crdsDeleteEventsCounter := promauto.With(ksmMetricsRegistry).NewCounter(prometheus.CounterOpts{
 		Name: "kube_state_metrics_custom_resource_state_delete_events_total",
@@ -307,6 +318,7 @@ func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 	if config != nil {
 		discovererInstance := &discovery.CRDiscoverer{
 			CRDsAddEventsCounter:    crdsAddEventsCounter,
+			CRDsUpdateEventsCounter: crdsUpdateEventsCounter,
 			CRDsDeleteEventsCounter: crdsDeleteEventsCounter,
 			CRDsCacheCountGauge:     crdsCacheCountGauge,
 		}
@@ -488,6 +500,7 @@ func buildTelemetryServer(registry prometheus.Gatherer, authFilter bool, kubeCon
 		Name:        "kube-state-metrics",
 		Description: "Self-metrics for kube-state-metrics",
 		Version:     version.Info(),
+		Profiling:   "false",
 		Links: []web.LandingLinks{
 			{
 				Address: metricsPath,
@@ -507,6 +520,9 @@ func handleClusterDelegationForProber(client kubernetes.Interface, probeType str
 	return func(w http.ResponseWriter, _ *http.Request) {
 		got := client.CoreV1().RESTClient().Get().AbsPath(probeType).Do(context.Background())
 		if got.Error() != nil {
+			var statusCode int
+			got.StatusCode(&statusCode)
+			klog.Warningf("Failed to contact API server for %s: got %d", probeType, statusCode)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			w.Write([]byte(http.StatusText(http.StatusServiceUnavailable)))
 			return
