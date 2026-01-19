@@ -948,8 +948,11 @@ func (x *LetReference) resolve(ctx *OpContext, state combinedFlags) *Vertex {
 
 	// We should only partly finalize the result here as it is not safe to
 	// finalize any references made by the let.
+	if !ctx.isDevVersion() {
+		arc.Finalize(ctx)
+	}
 	b := arc.Bottom()
-	if !arc.MultiLet && b == nil {
+	if !arc.MultiLet && b == nil && n.Rooted() {
 		return arc
 	}
 
@@ -986,7 +989,8 @@ func (x *LetReference) resolve(ctx *OpContext, state combinedFlags) *Vertex {
 		v = n
 		e.cache[key] = n
 		if ctx.isDevVersion() {
-			nc := n.getState(ctx)
+			// TODO(mem): enable again once we implement memory management.
+			// nc := n.getState(ctx)
 			// TODO: unlike with the old evaluator, we do not allow the first
 			// cycle to be skipped. Doing so can lead to hanging evaluation.
 			// As the cycle detection works slightly differently in the new
@@ -995,8 +999,7 @@ func (x *LetReference) resolve(ctx *OpContext, state combinedFlags) *Vertex {
 			// detection.
 			// nc.hasNonCycle = true
 			// Allow a first cycle to be skipped.
-			nc.free()
-			n.unify(ctx, allKnown, finalize)
+			// nc.free()
 		} else {
 			nc := n.getNodeContext(ctx, 0)
 			nc.hasNonCycle = true // Allow a first cycle to be skipped.
@@ -1379,12 +1382,13 @@ func (c *OpContext) validate(env *Environment, src ast.Node, x Expr, op Op, flag
 
 	match := op != EqualOp // non-error case
 
-	// Like value(), but retain the original, unwrapped result.
 	c.inValidator++
+	// Note that evalState may call yield, so we need to balance the counter
+	// with a defer.
+	defer func() { c.inValidator-- }()
 	req := flags
 	req = final(state, needTasksDone)
 	v := c.evalState(x, req)
-	c.inValidator--
 	u, _ := c.getDefault(v)
 	u = Unwrap(u)
 
@@ -1529,16 +1533,20 @@ func (x *CallExpr) Source() ast.Node {
 }
 
 func (x *CallExpr) evaluate(c *OpContext, state combinedFlags) Value {
+	call := &CallContext{
+		ctx:  c,
+		call: x,
+	}
+
 	fun := c.value(x.Fun, require(partial, concreteKnown))
-	var b *Builtin
 	switch f := fun.(type) {
 	case *Builtin:
-		b = f
+		call.builtin = f
 		if f.RawFunc != nil {
-			if !b.checkArgs(c, pos(x), len(x.Args)) {
+			if !call.builtin.checkArgs(c, pos(x), len(x.Args)) {
 				return nil
 			}
-			return f.RawFunc(c, x.Args)
+			return f.RawFunc(call)
 		}
 
 	case *BuiltinValidator:
@@ -1554,13 +1562,24 @@ func (x *CallExpr) evaluate(c *OpContext, state combinedFlags) Value {
 			return &v
 
 		default:
-			b = f.Builtin
+			call.builtin = f.Builtin
 		}
 
 	default:
 		c.AddErrf("cannot call non-function %s (type %s)", x.Fun, kind(fun))
 		return nil
 	}
+
+	// Arguments to functions are open. This mostly matters for NonConcrete
+	// builtins.
+	saved := c.ci
+	c.ci.FromDef = false
+	c.ci.FromEmbed = false
+	defer func() {
+		c.ci.FromDef = saved.FromDef
+		c.ci.FromEmbed = saved.FromEmbed
+	}()
+
 	args := []Value{}
 	for i, a := range x.Args {
 		saved := c.errs
@@ -1568,13 +1587,22 @@ func (x *CallExpr) evaluate(c *OpContext, state combinedFlags) Value {
 		// XXX: XXX: clear id.closeContext per argument and remove from runTask?
 
 		runMode := state.runMode()
-		cond := state.conditions() | allAncestorsProcessed | concreteKnown
-		state = combineMode(cond, runMode).withVertexStatus(state.vertexStatus())
-
+		cond := state.conditions()
 		var expr Value
-		if b.NonConcrete {
+		if call.builtin.NonConcrete {
+			state = combineMode(cond, runMode).withVertexStatus(state.vertexStatus())
 			expr = c.evalState(a, state)
 		} else {
+			cond |= fieldSetKnown | concreteKnown
+			// Be sure to process disjunctions at the very least when
+			// finalizing. Requiring disjunctions earlier may lead to too eager
+			// evaluation.
+			//
+			// TODO: Ideally we would always add this flag regardless of mode.
+			if runMode == finalize {
+				cond |= disjunctionTask
+			}
+			state = combineMode(cond, runMode).withVertexStatus(state.vertexStatus())
 			expr = c.value(a, state)
 		}
 
@@ -1599,10 +1627,11 @@ func (x *CallExpr) evaluate(c *OpContext, state combinedFlags) Value {
 	if c.HasErr() {
 		return nil
 	}
-	if b.IsValidator(len(args)) {
-		return &BuiltinValidator{x, b, args}
+	if call.builtin.IsValidator(len(args)) {
+		return &BuiltinValidator{x, call.builtin, args}
 	}
-	result := b.call(c, pos(x), false, args)
+	call.args = args
+	result := call.builtin.call(call)
 	if result == nil {
 		return nil
 	}
@@ -1621,7 +1650,7 @@ type Builtin struct {
 	// arguments. By default, all arguments are checked to be concrete.
 	NonConcrete bool
 
-	Func func(c *OpContext, args []Value) Expr
+	Func func(call *CallContext) Expr
 
 	// RawFunc gives low-level control to CUE's internals for builtins.
 	// It should be used when fine control over the evaluation process is
@@ -1629,7 +1658,9 @@ type Builtin struct {
 	// gives them fine control over how exactly such value gets evaluated.
 	// A RawFunc may pass CycleInfo, errors and other information through
 	// the Context.
-	RawFunc func(c *OpContext, args []Expr) Value
+	//
+	// TODO: consider merging Func and RawFunc into a single field again.
+	RawFunc func(call *CallContext) Value
 
 	Package Feature
 	Name    string
@@ -1710,15 +1741,18 @@ func (x *Builtin) checkArgs(c *OpContext, p token.Pos, numArgs int) bool {
 	return true
 }
 
-func (x *Builtin) call(c *OpContext, p token.Pos, validate bool, args []Value) Expr {
+func (x *Builtin) call(call *CallContext) Expr {
+	c := call.ctx
+	p := call.Pos()
+
 	fun := x // right now always x.
-	if !x.checkArgs(c, p, len(args)) {
+	if !x.checkArgs(c, p, len(call.args)) {
 		return nil
 	}
-	for i := len(args); i < len(x.Params); i++ {
-		args = append(args, x.Params[i].Default())
+	for i := len(call.args); i < len(x.Params); i++ {
+		call.args = append(call.args, x.Params[i].Default())
 	}
-	for i, a := range args {
+	for i, a := range call.args {
 		if x.Params[i].Kind() == BottomKind {
 			continue
 		}
@@ -1727,7 +1761,7 @@ func (x *Builtin) call(c *OpContext, p token.Pos, validate bool, args []Value) E
 		}
 		if k := kind(a); x.Params[i].Kind()&k == BottomKind {
 			code := EvalError
-			b, _ := args[i].(*Bottom)
+			b, _ := call.args[i].(*Bottom)
 			if b != nil {
 				code = b.Code
 			}
@@ -1748,15 +1782,24 @@ func (x *Builtin) call(c *OpContext, p token.Pos, validate bool, args []Value) E
 					a, v, i+1, fun)
 				return nil
 			}
-			args[i] = n
+			call.args[i] = n
 		}
 	}
-	saved := c.IsValidator
-	c.IsValidator = validate
-	ret := x.Func(c, args)
-	c.IsValidator = saved
 
-	return ret
+	// Arguments to functions are open. This mostly matters for NonConcrete
+	// builtins.
+	saved := c.IsValidator
+	c.IsValidator = call.isValidator
+	ci := c.ci
+	c.ci.FromEmbed = false
+	c.ci.FromDef = false
+	defer func() {
+		c.ci.FromDef = ci.FromDef
+		c.ci.FromEmbed = ci.FromEmbed
+		c.IsValidator = saved
+	}()
+
+	return x.Func(call)
 }
 
 func (x *Builtin) Source() ast.Node { return nil }
@@ -1794,14 +1837,27 @@ func (x *BuiltinValidator) validate(c *OpContext, v Value) *Bottom {
 	args[0] = v
 	copy(args[1:], x.Args)
 
-	return validateWithBuiltin(c, x.Pos(), x.Builtin, args)
+	call := &CallContext{
+		ctx:         c,
+		call:        x.Src,
+		builtin:     x.Builtin,
+		args:        args,
+		isValidator: true,
+	}
+
+	return validateWithBuiltin(call)
 }
 
-func validateWithBuiltin(c *OpContext, src token.Pos, b *Builtin, args []Value) *Bottom {
+func validateWithBuiltin(call *CallContext) *Bottom {
 	var severeness ErrorCode
 	var err errors.Error
 
-	res := b.call(c, src, true, args)
+	c := call.ctx
+	b := call.builtin
+	src := call.Pos()
+	arg0 := call.Value(0)
+
+	res := call.builtin.call(call)
 	switch v := res.(type) {
 	case nil:
 		return nil
@@ -1824,7 +1880,7 @@ func validateWithBuiltin(c *OpContext, src token.Pos, b *Builtin, args []Value) 
 
 	// If the validator returns an error and we already had an error, just
 	// return the original error.
-	if b, ok := Unwrap(args[0]).(*Bottom); ok {
+	if b, ok := Unwrap(call.Value(0)).(*Bottom); ok {
 		return b
 	}
 	// failed:
@@ -1833,9 +1889,10 @@ func validateWithBuiltin(c *OpContext, src token.Pos, b *Builtin, args []Value) 
 
 	// Note: when the builtin accepts non-concrete arguments, omit them because
 	// they can easily be very large.
-	if !b.NonConcrete && len(args) > 1 {
+	if !b.NonConcrete && call.NumParams() > 1 { // use NumArgs instead
 		buf.WriteString("(")
-		for i, a := range args[1:] {
+		// TODO: use accessor instead of call.arg
+		for i, a := range call.args[1:] {
 			if i > 0 {
 				_, _ = buf.WriteString(", ")
 			}
@@ -1844,11 +1901,9 @@ func validateWithBuiltin(c *OpContext, src token.Pos, b *Builtin, args []Value) 
 		buf.WriteString(")")
 	}
 
-	vErr := c.NewPosf(src, "invalid value %s (does not satisfy %s)", args[0], buf.String())
+	vErr := c.NewPosf(src, "invalid value %s (does not satisfy %s)", arg0, buf.String())
 
-	for _, v := range args {
-		vErr.AddPosition(v)
-	}
+	call.AddPositions(vErr)
 
 	return &Bottom{
 		Code: severeness,
@@ -1945,15 +2000,8 @@ type Comprehension struct {
 	// The type of field as which the comprehension is added.
 	arcType ArcType
 
-	// The closeContext into which the comprehension is added. Upon a successful
-	// completion of the comprehension, the arcType should be updated in this
-	// closeContext. After this is done, the corresponding parent closeContext
-	// must be closed.
-	arcCC *closeContext
-
-	// This is incremented by the Comprehension upon creation, and decremented
-	// once it is known whether the comprehension succeeded.
-	cc *closeContext
+	// Kind indicates the possible kind of Value.
+	kind Kind
 
 	// Only used for partial comprehensions.
 	comp   *envComprehension
@@ -2012,7 +2060,7 @@ func (x *ForClause) Source() ast.Node {
 }
 
 func (c *OpContext) forSource(x Expr) *Vertex {
-	state := require(conjuncts, needFieldSetKnown)
+	state := attempt(conjuncts, needFieldSetKnown)
 
 	// TODO: always get the vertex. This allows a whole bunch of trickery
 	// down the line.
@@ -2022,7 +2070,13 @@ func (c *OpContext) forSource(x Expr) *Vertex {
 
 	node, ok := v.(*Vertex)
 	if ok && c.isDevVersion() {
-		node.unify(c, state.conditions(), yield)
+		// We do not request to "yield" here, but rather rely on the
+		// call-by-need behavior in combination with the freezing mechanism.
+		// TODO: this seems a bit fragile. At some point we need to make this
+		// more robust by moving to a pure call-by-need mechanism, for instance.
+		// TODO: using attemptOnly here will remove the cyclic reference error
+		// of comprehension.t1.ok (which also errors in V2),
+		node.unify(c, state.conditions(), finalize, true)
 	}
 
 	v, ok = c.getDefault(v)
@@ -2060,7 +2114,7 @@ func (c *OpContext) forSource(x Expr) *Vertex {
 		}
 
 	default:
-		if kind := v.Kind(); kind&StructKind != 0 {
+		if kind := v.Kind(); kind&(StructKind|ListKind) != 0 {
 			c.addErrf(IncompleteError, pos(x),
 				"cannot range over %s (incomplete type %s)", x, kind)
 			return emptyNode
@@ -2069,6 +2123,17 @@ func (c *OpContext) forSource(x Expr) *Vertex {
 			c.addErrf(0, pos(x), // TODO(error): better message.
 				"cannot range over %s (found %s, want list or struct)",
 				x.Source(), v.Kind())
+			return emptyNode
+		}
+	}
+	if c.isDevVersion() {
+		kind := v.Kind()
+		// At this point it is possible that the Vertex represents an incomplete
+		// struct or list, which is the case if it may be struct or list, but
+		// is also at least some other type, such as is the case with top.
+		if kind&(StructKind|ListKind) != 0 && kind != StructKind && kind != ListKind {
+			c.addErrf(IncompleteError, pos(x),
+				"cannot range over %s (incomplete type %s)", x, kind)
 			return emptyNode
 		}
 	}

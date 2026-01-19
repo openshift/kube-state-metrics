@@ -13,9 +13,9 @@ import (
 	"github.com/hairyhenderson/go-fsimpl"
 )
 
-// NewEnvFS returns a filesystem (an fs.FS) that can be used to read data from
+// newEnvFS returns a filesystem (an fs.FS) that can be used to read data from
 // environment variables.
-func NewEnvFS(_ *url.URL) (fs.FS, error) {
+func newEnvFS(_ *url.URL) (fs.FS, error) {
 	return &envFS{locfs: os.DirFS("/")}, nil
 }
 
@@ -24,7 +24,7 @@ type envFS struct {
 }
 
 //nolint:gochecknoglobals
-var EnvFS = fsimpl.FSProviderFunc(NewEnvFS, "env")
+var EnvFS = fsimpl.FSProviderFunc(newEnvFS, "env")
 
 var _ fs.FS = (*envFS)(nil)
 
@@ -194,7 +194,7 @@ func (fi staticFileInfo) Mode() fs.FileMode           { return fi.mode }
 func (fi *staticFileInfo) ModTime() time.Time         { return fi.modTime }
 func (fi staticFileInfo) Name() string                { return fi.name }
 func (fi staticFileInfo) Size() int64                 { return fi.size }
-func (fi staticFileInfo) Sys() interface{}            { return nil }
+func (fi staticFileInfo) Sys() any                    { return nil }
 func (fi *staticFileInfo) Info() (fs.FileInfo, error) { return fi, nil }
 func (fi staticFileInfo) Type() fs.FileMode           { return fi.Mode().Type() }
 

@@ -19,11 +19,13 @@
 package list
 
 import (
+	"slices"
 	"sort"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/internal"
 	"cuelang.org/go/internal/core/adt"
+	"cuelang.org/go/internal/core/eval"
 	"cuelang.org/go/internal/types"
 )
 
@@ -151,7 +153,7 @@ func makeValueSorter(list []cue.Value, cmp cue.Value) (s valueSorter) {
 
 	var v types.Value
 	cmp.Core(&v)
-	ctx := adt.NewContext(v.R, v.V)
+	ctx := eval.NewContext(v.R, v.V)
 
 	n := &adt.Vertex{
 		Label:     v.V.Label,
@@ -212,7 +214,7 @@ func SortStable(list []cue.Value, cmp cue.Value) (sorted []cue.Value, err error)
 
 // SortStrings sorts a list of strings in increasing order.
 func SortStrings(a []string) []string {
-	sort.Strings(a)
+	slices.Sort(a)
 	return a
 }
 
@@ -226,5 +228,5 @@ func IsSorted(list []cue.Value, cmp cue.Value) bool {
 
 // IsSortedStrings tests whether a list is a sorted lists of strings.
 func IsSortedStrings(a []string) bool {
-	return sort.StringsAreSorted(a)
+	return slices.IsSorted(a)
 }

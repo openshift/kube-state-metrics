@@ -221,8 +221,31 @@ package adt
 // and evaluated before doing a lookup in such structs to be correct. For the
 // purpose of this algorithm, this especially pertains to structural cycles.
 //
-// TODO: implement: current handling of inline still loosly based on old
-// algorithm.
+// Note that the scope in which scope the "helper" field is defined may
+// determine whether or not there is a structural cycle. Consider, for instance,
+//
+//      X: {in: a, out: in}
+//      a: b: (X & {in: a}).out
+//
+// Two possible rewrites are:
+//
+//      X: {in: a, out: in}
+//      a: b: _a.out
+//      _a: X & {in: a}
+//
+// and
+//
+//      X: {in: a, out: in}
+//      a: {
+//          b: _b.out
+//          _b: X & {in: a}
+//      }
+//
+// The former prevents a structural cycle, the later results in a structural
+// cycle.
+//
+// The current implementation takes the former approach, which more closely
+// mimics the V2 implementation. Note that other approaches are possible.
 //
 // ### Examples
 //
@@ -632,11 +655,6 @@ func (n *nodeContext) detectCycleV3(arc *Vertex, env *Environment, x Resolver, c
 	// we also can terminate, as this is a structural cycle.
 	// TODO: use depth or check direct ancestry.
 	if n.hasAncestorV3(arc) {
-		if n.node.IsDynamic || ci.Inline {
-			n.reportCycleError()
-			return ci, true
-		}
-
 		return n.markCyclicV3(arc, env, x, ci)
 	}
 
@@ -648,15 +666,8 @@ func (n *nodeContext) detectCycleV3(arc *Vertex, env *Environment, x Resolver, c
 
 	for r := ci.Refs; r != nil; r = r.Next {
 		if equalDeref(r.Arc, arc) {
-			if n.node.IsDynamic || ci.Inline {
-				n.reportCycleError()
-				return ci, true
-			}
-
 			if equalDeref(r.Node, n.node) {
 				// reference cycle
-				// TODO: in some cases we must continue to fully evaluate.
-				// Return false here to solve v0.7.txtar:mutual.t4.ok.p1 issue.
 				return ci, true
 			}
 
@@ -664,10 +675,25 @@ func (n *nodeContext) detectCycleV3(arc *Vertex, env *Environment, x Resolver, c
 			// is optional, we allow this to continue one more cycle.
 			if ci.CycleType == IsOptional && n.hasNonCyclic {
 				ci.CycleType = MaybeCyclic
+				// There my still be a cycle if the optional field is a pattern
+				// that unifies with itself, as in:
+				//
+				//		[string]: c
+				//		a: b
+				//		b: _
+				//		c: a: int
+				//
+				// This is equivalent to a reference cycle.
+				if r.Depth == n.node.state.depth {
+					return ci, true
+				}
 				ci.Refs = nil
 				return ci, false
 			}
 
+			return n.markCyclicPathV3(arc, env, x, ci)
+		}
+		if equalDeref(r.Node, n.node) && r.Ref == x && arc.nonRooted {
 			return n.markCyclicPathV3(arc, env, x, ci)
 		}
 	}
@@ -683,6 +709,14 @@ func (n *nodeContext) detectCycleV3(arc *Vertex, env *Environment, x Resolver, c
 	return ci, false
 }
 
+// markNonCyclic records when a non-cyclic conjunct is processed.
+func (n *nodeContext) markNonCyclic(id CloseInfo) {
+	switch id.CycleType {
+	case NoCycle, IsOptional:
+		n.hasNonCyclic = true
+	}
+}
+
 // markCyclicV3 marks a conjunct as being cyclic. Also, it postpones processing
 // the conjunct in the absence of evidence of a non-cyclic conjunct.
 func (n *nodeContext) markCyclicV3(arc *Vertex, env *Environment, x Resolver, ci CloseInfo) (CloseInfo, bool) {
@@ -696,7 +730,6 @@ func (n *nodeContext) markCyclicV3(arc *Vertex, env *Environment, x Resolver, ci
 		// TODO: investigate if we can get rid of cyclicConjuncts in the new
 		// evaluator.
 		v := Conjunct{env, x, ci}
-		n.node.cc().incDependent(n.ctx, DEFER, nil)
 		n.cyclicConjuncts = append(n.cyclicConjuncts, cyclicConjunct{v, arc})
 		return ci, true
 	}
@@ -709,15 +742,25 @@ func (n *nodeContext) markCyclicPathV3(arc *Vertex, env *Environment, x Resolver
 
 	n.hasAnyCyclicConjunct = true
 
-	if !n.hasNonCyclic && env != nil {
+	if !n.hasNonCyclic && !n.hasNonCycle && env != nil {
 		// TODO: investigate if we can get rid of cyclicConjuncts in the new
 		// evaluator.
 		v := Conjunct{env, x, ci}
-		n.node.cc().incDependent(n.ctx, DEFER, nil)
 		n.cyclicConjuncts = append(n.cyclicConjuncts, cyclicConjunct{v, arc})
 		return ci, true
 	}
 	return ci, false
+}
+
+// combineCycleInfo merges the cycle information collected in the context into
+// the given CloseInfo. Note that it only merges the cycle information in its
+// entirety, if present, to avoid getting unrelated data.
+func (c *OpContext) combineCycleInfo(ci CloseInfo) CloseInfo {
+	cc := c.ci.CycleInfo
+	if cc.IsCyclic {
+		ci.CycleInfo = cc
+	}
+	return ci
 }
 
 // hasDepthCycle uses depth counters to keep track of cycles:
@@ -1063,9 +1106,6 @@ outer:
 		// TODO: investigate if we can get rid of cyclicConjuncts in the new
 		// evaluator.
 		v := Conjunct{env, x, ci}
-		if n.ctx.isDevVersion() {
-			n.node.cc().incDependent(n.ctx, DEFER, nil)
-		}
 		n.cyclicConjuncts = append(n.cyclicConjuncts, cyclicConjunct{v, arc})
 		return ci, true
 	}
@@ -1093,13 +1133,18 @@ func getNonCyclicCount(c Conjunct) int {
 // updateCyclicStatusV3 looks for proof of non-cyclic conjuncts to override
 // a structural cycle.
 func (n *nodeContext) updateCyclicStatusV3(c CloseInfo) {
+	if n.ctx.inDisjunct == 0 {
+		n.hasFieldValue = true
+	}
 	if !c.IsCyclic {
 		n.hasNonCycle = true
 		for _, c := range n.cyclicConjuncts {
 			ci := c.c.CloseInfo
-			ci.cc = n.node.rootCloseContext(n.ctx)
-			n.scheduleVertexConjuncts(c.c, c.arc, ci)
-			n.node.cc().decDependent(n.ctx, DEFER, nil)
+			if c.arc != nil {
+				n.scheduleVertexConjuncts(c.c, c.arc, ci)
+			} else {
+				n.scheduleConjunct(c.c, ci)
+			}
 		}
 		n.cyclicConjuncts = n.cyclicConjuncts[:0]
 	}
@@ -1120,10 +1165,6 @@ func (n *nodeContext) updateCyclicStatus(c CloseInfo) {
 }
 
 func assertStructuralCycleV3(n *nodeContext) bool {
-	// TODO: is this the right place to put it?
-	for range n.cyclicConjuncts {
-		n.node.cc().decDependent(n.ctx, DEFER, nil)
-	}
 	n.cyclicConjuncts = n.cyclicConjuncts[:0]
 
 	if n.hasOnlyCyclicConjuncts() {

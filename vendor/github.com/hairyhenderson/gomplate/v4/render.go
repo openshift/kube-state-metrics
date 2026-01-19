@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"path"
 	"slices"
 	"strings"
-	"sync"
 	"text/template"
 	"time"
 
 	"github.com/hairyhenderson/go-fsimpl"
-	"github.com/hairyhenderson/go-fsimpl/autofs"
 	"github.com/hairyhenderson/gomplate/v4/internal/datafs"
 	"github.com/hairyhenderson/gomplate/v4/internal/funcs"
 )
@@ -187,16 +186,16 @@ func (r *renderer) RenderTemplates(ctx context.Context, templates []Template) er
 	return r.renderTemplatesWithData(ctx, templates, tmplctx)
 }
 
-func (r *renderer) renderTemplatesWithData(ctx context.Context, templates []Template, tmplctx interface{}) error {
+func (r *renderer) renderTemplatesWithData(ctx context.Context, templates []Template, tmplctx any) error {
 	// update funcs with the current context
 	// only done here to ensure the context is properly set in func namespaces
 	f := CreateFuncs(ctx)
 
 	// add datasource funcs here because they need to share the source reader
-	addToMap(f, funcs.CreateDataSourceFuncs(ctx, r.sr))
+	maps.Copy(f, funcs.CreateDataSourceFuncs(ctx, r.sr))
 
 	// add user-defined funcs last so they override the built-in funcs
-	addToMap(f, r.funcs)
+	maps.Copy(f, r.funcs)
 
 	// track some metrics for debug output
 	start := time.Now()
@@ -210,7 +209,7 @@ func (r *renderer) renderTemplatesWithData(ctx context.Context, templates []Temp
 	return nil
 }
 
-func (r *renderer) renderTemplate(ctx context.Context, template Template, f template.FuncMap, tmplctx interface{}) error {
+func (r *renderer) renderTemplate(ctx context.Context, template Template, f template.FuncMap, tmplctx any) error {
 	if template.Writer != nil {
 		if wr, ok := template.Writer.(io.Closer); ok {
 			defer wr.Close()
@@ -241,7 +240,7 @@ func (r *renderer) Render(ctx context.Context, name, text string, wr io.Writer) 
 }
 
 // parseTemplate - parses text as a Go template with the given name and options
-func (r *renderer) parseTemplate(ctx context.Context, name, text string, funcs template.FuncMap, tmplctx interface{}) (tmpl *template.Template, err error) {
+func (r *renderer) parseTemplate(ctx context.Context, name, text string, funcs template.FuncMap, tmplctx any) (tmpl *template.Template, err error) {
 	tmpl = template.New(name)
 
 	missingKey := r.missingKey
@@ -372,20 +371,4 @@ func parseNestedTemplate(_ context.Context, fsys fs.FS, alias, fname string, tmp
 }
 
 // DefaultFSProvider is the default filesystem provider used by gomplate
-var DefaultFSProvider = sync.OnceValue(
-	func() fsimpl.FSProvider {
-		fsp := fsimpl.NewMux()
-
-		// start with all go-fsimpl filesystems
-		fsp.Add(autofs.FS)
-
-		// override go-fsimpl's filefs with wdfs to handle working directories
-		fsp.Add(datafs.WdFS)
-
-		// gomplate-only filesystem
-		fsp.Add(datafs.EnvFS)
-		fsp.Add(datafs.StdinFS)
-		fsp.Add(datafs.MergeFS)
-
-		return fsp
-	})()
+var DefaultFSProvider = datafs.DefaultProvider

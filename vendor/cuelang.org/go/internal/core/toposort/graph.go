@@ -16,15 +16,13 @@ package toposort
 
 import (
 	"cmp"
-	"math"
 	"slices"
 
 	"cuelang.org/go/internal/core/adt"
 )
 
 const (
-	NodeUnsorted     = -1
-	NodeInCurrentScc = -2
+	NodeUnsorted = -1
 )
 
 type Graph struct {
@@ -39,20 +37,20 @@ type Node struct {
 	// temporary state for calculating the Strongly Connected
 	// Components of a graph.
 	sccNodeState *sccNodeState
-	// temporary state for calculating the Elementary Cycles of a
-	// graph.
-	ecNodeState *ecNodeState
-	position    int
+	position     int
 }
 
 func (n *Node) IsSorted() bool {
 	return n.position >= 0
 }
 
-func (n *Node) Name(index adt.StringIndexer) string {
-	// TODO: two different fields like "#foo" and #foo, can have the same raw
-	// string
-	return n.Feature.RawString(index)
+// SafeName returns a string useful for debugging, regardless of the
+// type of the feature. So for IntLabels, you'll get back `1`, `10`
+// etc; for identifiers, you may get back a string with quotes in it,
+// eg `"runs-on"`. So this is not useful for comparisons, but it is
+// useful (and safe) for debugging.
+func (n *Node) SafeName(index adt.StringIndexer) string {
+	return n.Feature.SelectorString(index)
 }
 
 type Nodes []*Node
@@ -71,12 +69,20 @@ type edge struct {
 }
 
 type GraphBuilder struct {
+	allowEdges     bool
 	edgesSet       map[edge]struct{}
 	nodesByFeature map[adt.Feature]*Node
 }
 
-func NewGraphBuilder() *GraphBuilder {
+// NewGraphBuilder is the constructor for GraphBuilder.
+//
+// If you disallow edges, then nodes can still be added to the graph,
+// and the [GraphBuilder.AddEdge] method will not error, but edges
+// will never be added between nodes. This has the effect that
+// topological ordering is not possible.
+func NewGraphBuilder(allowEdges bool) *GraphBuilder {
 	return &GraphBuilder{
+		allowEdges:     allowEdges,
 		edgesSet:       make(map[edge]struct{}),
 		nodesByFeature: make(map[adt.Feature]*Node),
 	}
@@ -87,6 +93,12 @@ func NewGraphBuilder() *GraphBuilder {
 // multiple calls with the same arguments will not create multiple
 // edges, nor error.
 func (builder *GraphBuilder) AddEdge(from, to adt.Feature) {
+	if !builder.allowEdges {
+		builder.EnsureNode(from)
+		builder.EnsureNode(to)
+		return
+	}
+
 	edge := edge{from: from, to: to}
 	if _, found := builder.edgesSet[edge]; found {
 		return
@@ -122,146 +134,46 @@ func (builder *GraphBuilder) Build() *Graph {
 type indexComparison struct{ adt.StringIndexer }
 
 func (index *indexComparison) compareNodeByName(a, b *Node) int {
-	return cmp.Compare(a.Name(index), b.Name(index))
-}
+	aFeature, bFeature := a.Feature, b.Feature
+	aIsInt, bIsInt := aFeature.Typ() == adt.IntLabel, bFeature.Typ() == adt.IntLabel
 
-func (index *indexComparison) compareNodesByNames(a, b Nodes) int {
-	lim := min(len(a), len(b))
-	for i := 0; i < lim; i++ {
-		if comparison := index.compareNodeByName(a[i], b[i]); comparison != 0 {
-			return comparison
-		}
+	switch {
+	case aIsInt && bIsInt:
+		return cmp.Compare(aFeature.Index(), bFeature.Index())
+	case aIsInt:
+		return -1
+	case bIsInt:
+		return 1
+	default:
+		return cmp.Compare(aFeature.RawString(index), bFeature.RawString(index))
 	}
-	return cmp.Compare(len(a), len(b))
-}
-
-func (index *indexComparison) compareCyclesByNames(a, b *Cycle) int {
-	return index.compareNodesByNames(a.Nodes, b.Nodes)
 }
 
 func (index *indexComparison) compareComponentsByNodes(a, b *StronglyConnectedComponent) int {
-	return index.compareNodesByNames(a.Nodes, b.Nodes)
-}
-
-func chooseCycleEntryNode(cycle *Cycle) (entryNode *Node, enabledSince, brokenEdgeCount int) {
-	enabledSince = math.MaxInt
-
-	for _, cycleNode := range cycle.Nodes {
-		if cycleNode.IsSorted() {
-			// this node is already in the sorted result
-			continue
-		}
-	NextNodeIncoming:
-		for _, incoming := range cycleNode.Incoming {
-			position := incoming.position
-
-			if position < 0 {
-				// this predecessor node has not yet been added to the sorted
-				// result.
-				for _, cycleNode1 := range cycle.Nodes {
-					// ignore this predecessor node if it is part of this cycle.
-					if cycleNode1 == incoming {
-						continue NextNodeIncoming
-					}
-				}
-				brokenEdgeCount++
-				continue NextNodeIncoming
-			}
-
-			// this predecessor node must already be in the sorted output.
-			if position < enabledSince {
-				enabledSince = position
-				entryNode = cycleNode
-			}
-		}
-	}
-	return entryNode, enabledSince, brokenEdgeCount
-}
-
-func chooseCycle(indexCmp *indexComparison, unusedCycles []*Cycle) *Cycle {
-	chosenCycleIdx := -1
-	chosenCycleBrokenEdgeCount := math.MaxInt
-	chosenCycleEnabledSince := math.MaxInt
-	var chosenCycleEntryNode *Node
-
-	for i, cycle := range unusedCycles {
-		if cycle == nil {
-			continue
-		}
-		debug("cycle %d: %v\n", i, cycle)
-		entryNode, enabledSince, brokenEdgeCount := chooseCycleEntryNode(cycle)
-
-		if entryNode == nil {
-			entryNode = slices.MinFunc(
-				cycle.Nodes, indexCmp.compareNodeByName)
-		}
-
-		debug("cycle %v; edgeCount %v; enabledSince %v; entryNode %v\n",
-			cycle, brokenEdgeCount, enabledSince,
-			entryNode.Name(indexCmp))
-
-		cycleIsBetter := chosenCycleIdx == -1
-		// this is written out long-form for ease of readability
-		switch {
-		case cycleIsBetter:
-			// noop
-		case brokenEdgeCount < chosenCycleBrokenEdgeCount:
-			cycleIsBetter = true
-		case brokenEdgeCount > chosenCycleBrokenEdgeCount:
-			// noop - only continue if ==
-
-		case enabledSince < chosenCycleEnabledSince:
-			cycleIsBetter = true
-		case enabledSince > chosenCycleEnabledSince:
-			// noop - only continue if ==
-
-		case entryNode.Name(indexCmp) < chosenCycleEntryNode.Name(indexCmp):
-			cycleIsBetter = true
-		case entryNode == chosenCycleEntryNode:
-			cycleIsBetter =
-				indexCmp.compareCyclesByNames(cycle, unusedCycles[chosenCycleIdx]) < 0
-		}
-
-		if cycleIsBetter {
-			chosenCycleIdx = i
-			chosenCycleBrokenEdgeCount = brokenEdgeCount
-			chosenCycleEnabledSince = enabledSince
-			chosenCycleEntryNode = entryNode
-		}
-	}
-
-	if chosenCycleEntryNode == nil {
-		return nil
-	}
-
-	debug("Chose cycle: %v; entering at node: %s\n",
-		unusedCycles[chosenCycleIdx], chosenCycleEntryNode.Name(indexCmp))
-	cycle := unusedCycles[chosenCycleIdx]
-	unusedCycles[chosenCycleIdx] = nil
-	cycle.RotateToStartAt(chosenCycleEntryNode)
-	return cycle
+	return slices.CompareFunc(a.Nodes, b.Nodes, index.compareNodeByName)
 }
 
 // Sort the features of the graph into a single slice.
 //
-// As far as possible, a topological sort is used.
+// As far as possible, a topological sort is used. We first calculate
+// the strongly-connected-components (SCCs) of the graph. If the graph
+// has no cycles then there will be 1 SCC per graph node, which we
+// then walk topologically. When there is a choice as to which SCC to
+// enter into next, a lexicographical comparison is done, and minimum
+// feature chosen.
 //
-// Whenever there is choice as to which feature should occur next, a
-// lexicographical comparison is done, and minimum feature chosen.
-//
-// Whenever progress cannot be made due to needing to enter into
-// cycles, the cycle to enter into, and the node of that cycle with
-// which to start, is selected based on:
-//
-//  1. minimising the number of incoming edges that are violated
-//  2. chosing a node which was reachable as early as possible
-//  3. chosing a node with a smaller feature name (lexicographical)
-func (self *Graph) Sort(index adt.StringIndexer) []adt.Feature {
+// If the graph has cycles, then there will be at least one SCC
+// containing several nodes. When we choose to enter this SCC, we use
+// a lexicographical ordering of its nodes. This avoids the need for
+// expensive and complex analysis of cycles: the maximum possible
+// number of cycles rises with the factorial of the number of nodes in
+// a component.
+func (graph *Graph) Sort(index adt.StringIndexer) []adt.Feature {
 	indexCmp := &indexComparison{index}
 
-	nodesSorted := make(Nodes, 0, len(self.nodes))
+	nodesSorted := make(Nodes, 0, len(graph.nodes))
 
-	scc := self.StronglyConnectedComponents()
+	scc := graph.StronglyConnectedComponents()
 	var sccReady []*StronglyConnectedComponent
 	for _, component := range scc {
 		component.visited = false
@@ -282,41 +194,8 @@ func (self *Graph) Sort(index adt.StringIndexer) []adt.Feature {
 		sccCurrent.visited = true
 		sccVisitedCount++
 		debug("scc current: %p %v\n", sccCurrent, sccCurrent)
-		var cyclesCurrent []*Cycle
 
-		var nodesReady Nodes
-	NextNode:
-		for _, node := range sccCurrent.Nodes {
-			node.position = NodeInCurrentScc
-			for _, required := range node.Incoming {
-				if !required.IsSorted() {
-					continue NextNode
-				}
-			}
-			nodesReady = append(nodesReady, node)
-		}
-		slices.SortFunc(nodesReady, indexCmp.compareNodeByName)
-
-		requiredLen := len(nodesSorted) + len(sccCurrent.Nodes)
-		for requiredLen != len(nodesSorted) {
-			if len(nodesReady) == 0 {
-				debug("Stuck after: %v\n", nodesSorted)
-				if cyclesCurrent == nil {
-					cyclesCurrent = sccCurrent.ElementaryCycles()
-					debug("cycles current: %v\n", cyclesCurrent)
-				}
-				cycle := chooseCycle(indexCmp, cyclesCurrent)
-				if cycle == nil {
-					panic("No cycle found.")
-				}
-				nodesSorted, nodesReady = appendNodes(
-					indexCmp, nodesSorted, cycle.Nodes, nodesReady)
-
-			} else {
-				nodesSorted, nodesReady = appendNodes(
-					indexCmp, nodesSorted, nodesReady[:1], nodesReady[1:])
-			}
-		}
+		nodesSorted = appendNodes(nodesSorted, sccCurrent.Nodes)
 
 		sccReadyNeedsSorting := false
 	SccNextOutgoing:
@@ -337,35 +216,12 @@ func (self *Graph) Sort(index adt.StringIndexer) []adt.Feature {
 	return nodesSorted.Features()
 }
 
-func appendNodes(indexCmp *indexComparison, nodesSorted, nodesReady, nodesEnabled Nodes) (nodesSortedOut, nodesEnabledOut Nodes) {
-	nodesReadyNeedsSorting := false
-	for _, node := range nodesReady {
-		if node.IsSorted() {
-			continue
-		}
-		node.position = len(nodesSorted)
-		nodesSorted = append(nodesSorted, node)
-
-	NextOutgoing:
-		for _, next := range node.Outgoing {
-			if next.position != NodeInCurrentScc {
-				continue
-			}
-			for _, required := range next.Incoming {
-				if !required.IsSorted() {
-					continue NextOutgoing
-				}
-			}
-			debug("After %v, found new ready: %s\n",
-				nodesSorted, next.Name(indexCmp))
-			nodesEnabled = append(nodesEnabled, next)
-			nodesReadyNeedsSorting = true
-		}
+func appendNodes(nodesSorted, nodesReady Nodes) Nodes {
+	for i, node := range nodesReady {
+		node.position = len(nodesSorted) + i
 	}
-	if nodesReadyNeedsSorting {
-		slices.SortFunc(nodesEnabled, indexCmp.compareNodeByName)
-	}
-	return nodesSorted, nodesEnabled
+	nodesSorted = append(nodesSorted, nodesReady...)
+	return nodesSorted
 }
 
 func debug(formatting string, args ...any) {

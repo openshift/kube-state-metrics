@@ -15,6 +15,9 @@
 package adt
 
 import (
+	"bytes"
+	"strings"
+
 	"github.com/cockroachdb/apd/v3"
 
 	"cuelang.org/go/internal"
@@ -66,9 +69,60 @@ func SimplifyBounds(ctx *OpContext, k Kind, x, y *BoundValue) Value {
 		}
 		return y
 
+	case xCat == -yCat && k == StringKind:
+		if xCat == -1 {
+			x, y = y, x
+			xv, yv = yv, xv
+		}
+
+		a, aOK := xv.(*String)
+		b, bOK := yv.(*String)
+
+		if !aOK || !bOK {
+			break
+		}
+
+		switch diff := strings.Compare(a.Str, b.Str); diff {
+		case -1:
+		case 0:
+			if x.Op == GreaterEqualOp && y.Op == LessEqualOp {
+				return ctx.NewString(a.Str)
+			}
+			fallthrough
+
+		case 1:
+			return ctx.NewErrf("incompatible string bounds %v and %v", y, x)
+		}
+
+	case xCat == -yCat && k == BytesKind:
+		if xCat == -1 {
+			x, y = y, x
+			xv, yv = yv, xv
+		}
+
+		a, aOK := xv.(*Bytes)
+		b, bOK := yv.(*Bytes)
+
+		if !aOK || !bOK {
+			break
+		}
+
+		switch diff := bytes.Compare(a.B, b.B); diff {
+		case -1:
+		case 0:
+			if x.Op == GreaterEqualOp && y.Op == LessEqualOp {
+				return ctx.newBytes(a.B)
+			}
+			fallthrough
+
+		case 1:
+			return ctx.NewErrf("incompatible bytes bounds %v and %v", y, x)
+		}
+
 	case xCat == -yCat:
 		if xCat == -1 {
 			x, y = y, x
+			xv, yv = yv, xv
 		}
 		a, aOK := xv.(*Num)
 		b, bOK := yv.(*Num)
@@ -107,7 +161,7 @@ func SimplifyBounds(ctx *OpContext, k Kind, x, y *BoundValue) Value {
 		// numbers
 		// >=a & <=b
 		//     a   if a == b
-		//     _|_ if a < b
+		//     _|_ if b < a
 		// >=a & <b
 		//     _|_ if b <= a
 		// >a  & <=b
@@ -118,7 +172,7 @@ func SimplifyBounds(ctx *OpContext, k Kind, x, y *BoundValue) Value {
 		// integers
 		// >=a & <=b
 		//     a   if b-a == 0
-		//     _|_ if a < b
+		//     _|_ if b < a
 		// >=a & <b
 		//     a   if b-a == 1
 		//     _|_ if b <= a
@@ -129,6 +183,21 @@ func SimplifyBounds(ctx *OpContext, k Kind, x, y *BoundValue) Value {
 		//     a+1 if b-a == 2
 		//     _|_ if b <= a
 
+		if d.Negative {
+			return errIncompatibleBounds(ctx, k, x, y)
+		}
+		// [apd.Decimal.Int64] on `d = hi - lo` will error if it overflows an int64.
+		// This is pretty common with CUE bounds like int64, which expands to:
+		//
+		//     >=-9_223_372_036_854_775_808 & <=9_223_372_036_854_775_807
+		//
+		// Constructing that error is unfortunate as it allocates a few times
+		// and stringifies the number too, which also has a cost.
+		// Which is entirely unnecessary, as we don't use the error value at all.
+		// If we know the integer will have more than one digit, give up early.
+		if d.NumDigits() > 1 {
+			break
+		}
 		switch diff, err := d.Int64(); {
 		case diff == 1:
 			if k&FloatKind == 0 {
@@ -138,23 +207,22 @@ func SimplifyBounds(ctx *OpContext, k Kind, x, y *BoundValue) Value {
 				if x.Op == GreaterThanOp && y.Op == LessEqualOp {
 					return ctx.newNum(&hi, k&NumberKind, x, y)
 				}
+				if x.Op == GreaterThanOp && y.Op == LessThanOp {
+					return ctx.NewErrf("incompatible integer bounds %v and %v", x, y)
+				}
 			}
 
 		case diff == 2:
 			if k&FloatKind == 0 && x.Op == GreaterThanOp && y.Op == LessThanOp {
 				_, _ = internal.BaseContext.Add(&d, d.SetInt64(1), &lo)
 				return ctx.newNum(&d, k&NumberKind, x, y)
-
 			}
 
 		case diff == 0 && err == nil:
 			if x.Op == GreaterEqualOp && y.Op == LessEqualOp {
 				return ctx.newNum(&lo, k&NumberKind, x, y)
 			}
-			fallthrough
-
-		case d.Negative:
-			return ctx.NewErrf("incompatible bounds %v and %v", x, y)
+			return errIncompatibleBounds(ctx, k, x, y)
 		}
 
 	case x.Op == NotEqualOp:
@@ -168,6 +236,14 @@ func SimplifyBounds(ctx *OpContext, k Kind, x, y *BoundValue) Value {
 		}
 	}
 	return nil
+}
+
+func errIncompatibleBounds(ctx *OpContext, k Kind, x, y *BoundValue) *Bottom {
+	if k == IntKind {
+		return ctx.NewErrf("incompatible integer bounds %v and %v", y, x)
+	} else {
+		return ctx.NewErrf("incompatible number bounds %v and %v", y, x)
+	}
 }
 
 func opInfo(op Op) (cmp Op, norm int) {

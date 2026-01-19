@@ -50,24 +50,25 @@ func Sanitize(f *ast.File) error {
 	}
 
 	// Gather all names.
-	walkVisitor(f, &scope{
+	s := &scope{
 		errFn:   z.errf,
 		nameFn:  z.addName,
 		identFn: z.markUsed,
-	})
+	}
+	ast.Walk(f, s.Before, nil)
 	if z.errs != nil {
 		return z.errs
 	}
 
 	// Add imports and unshadow.
-	s := &scope{
+	s = &scope{
 		file:    f,
 		errFn:   z.errf,
 		identFn: z.handleIdent,
 		index:   make(map[string]entry),
 	}
 	z.fileScope = s
-	walkVisitor(f, s)
+	ast.Walk(f, s.Before, nil)
 	if z.errs != nil {
 		return z.errs
 	}
@@ -181,6 +182,16 @@ func (z *sanitizer) cleanImports() {
 		decl.Specs = decl.Specs[:newLen]
 	})
 	z.file.Imports = fileImports
+	// Ensure that the first import always starts a new section
+	// so that if the file has a comment, it won't be associated with
+	// the import comment rather than the file.
+	first := true
+	z.file.VisitImports(func(decl *ast.ImportDecl) {
+		if first {
+			ast.SetRelPos(decl, token.NewSection)
+			first = false
+		}
+	})
 }
 
 func (z *sanitizer) handleIdent(s *scope, n *ast.Ident) bool {
@@ -337,7 +348,7 @@ func (z *sanitizer) uniqueName(base string, hidden bool) string {
 
 	const mask = 0xff_ffff_ffff_ffff // max bits; stay clear of int64 overflow
 	const shift = 4                  // rate of growth
-	for n := int64(0x10); ; n = int64(mask&((n<<shift)-1)) + 1 {
+	for n := int64(0x10); ; n = mask&((n<<shift)-1) + 1 {
 		num := z.rand.Intn(int(n))
 		name := fmt.Sprintf("%s_%01X", base, num)
 		if !z.names[name] {

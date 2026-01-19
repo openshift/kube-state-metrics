@@ -91,9 +91,6 @@ type closeNodeType uint8
 
 const (
 	// a closeRef node is created when there is a non-definition reference.
-	// These nodes are not necessary for computing results, but may be
-	// relevant down the line to group closures through embedded values and
-	// to track position information for failures.
 	closeRef closeNodeType = iota
 
 	// closeDef indicates this node was introduced as a result of referencing
@@ -102,14 +99,16 @@ const (
 
 	// closeEmbed indicates this node was added as a result of an embedding.
 	closeEmbed
-
-	_ = closeRef // silence the linter
 )
 
 // TODO: merge with closeInfo: this is a leftover of the refactoring.
 type CloseInfo struct {
-	*closeInfo               // old implementation (TODO: remove)
-	cc         *closeContext // new implementation (TODO: rename field to closeCtx)
+	*closeInfo // old implementation (TODO: remove)
+	// defID is a unique ID to track anything that gets inserted from this
+	// Conjunct.
+	defID          defID
+	enclosingEmbed defID // Tracks an embedding within a struct.
+	outerID        defID // Tracks the {} that should be closed after unifying.
 
 	// IsClosed is true if this conjunct represents a single level of closing
 	// as indicated by the closed builtin.
@@ -126,6 +125,9 @@ type CloseInfo struct {
 	// from fields defined by this conjunct.
 	// NOTE: only used when using closeContext.
 	FromDef bool
+
+	// Like FromDef, but used by APIs to force FromDef to be true.
+	TopDef bool
 
 	// FieldTypes indicates which kinds of fields (optional, dynamic, patterns,
 	// etc.) are contained in this conjunct.
@@ -180,7 +182,6 @@ func (c CloseInfo) SpawnEmbed(x Node) CloseInfo {
 		mode:     closeEmbed,
 		root:     EmbeddingSpan,
 		span:     c.span() | EmbeddingSpan,
-		decl:     c.closeInfo.Decl(),
 	}
 	return c
 }
@@ -194,7 +195,6 @@ func (c CloseInfo) SpawnGroup(x Expr) CloseInfo {
 		parent:   c.closeInfo,
 		location: x,
 		span:     c.span(),
-		decl:     c.closeInfo.Decl(),
 	}
 	return c
 }
@@ -208,7 +208,6 @@ func (c CloseInfo) SpawnSpan(x Node, t SpanType) CloseInfo {
 		location: x,
 		root:     t,
 		span:     c.span() | t,
-		decl:     c.closeInfo.Decl(),
 	}
 	return c
 }
@@ -231,7 +230,6 @@ func (c CloseInfo) SpawnRef(arc *Vertex, isDef bool, x Expr) CloseInfo {
 			parent:   c.closeInfo,
 			location: x,
 			span:     span,
-			decl:     c.closeInfo.Decl(),
 		}
 	}
 	if isDef {
@@ -247,21 +245,23 @@ func (c CloseInfo) SpawnRef(arc *Vertex, isDef bool, x Expr) CloseInfo {
 //
 // TODO(performance): this should be merged with resolve(). But for now keeping
 // this code isolated makes it easier to see what it is for.
-func IsDef(x Expr) bool {
+func IsDef(x Expr) (isDef bool, depth int) {
 	switch r := x.(type) {
 	case *FieldReference:
-		return r.Label.IsDef()
+		isDef = r.Label.IsDef()
 
 	case *SelectorExpr:
+		isDef, depth = IsDef(r.X)
+		depth++
 		if r.Sel.IsDef() {
-			return true
+			isDef = true
 		}
-		return IsDef(r.X)
 
 	case *IndexExpr:
-		return IsDef(r.X)
+		isDef, depth = IsDef(r.X)
+		depth++
 	}
-	return false
+	return isDef, depth
 }
 
 // A SpanType is used to indicate whether a CUE value is within the scope of
@@ -298,21 +298,6 @@ type closeInfo struct {
 
 	root SpanType
 	span SpanType
-
-	// decl is the parent declaration which contains the conjuct which
-	// gave rise to this closeInfo.
-	decl Decl
-}
-
-// Returns the first non-nil Decl from c, or c's parents, if possible.
-func (c *closeInfo) Decl() Decl {
-	for c != nil && c.decl == nil {
-		c = c.parent
-	}
-	if c == nil {
-		return nil
-	}
-	return c.decl
 }
 
 // closeStats holds the administrative fields for a closeInfo value. Each

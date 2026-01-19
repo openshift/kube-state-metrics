@@ -35,7 +35,10 @@ var lenBuiltin = &adt.Builtin{
 	Name:   "len",
 	Params: []adt.Param{{Value: &adt.BasicType{K: supportedByLen}}},
 	Result: adt.IntKind,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		v := args[0]
 		if x, ok := v.(*adt.Vertex); ok {
 			x.LockArcs = true
@@ -82,7 +85,10 @@ var closeBuiltin = &adt.Builtin{
 	Name:   "close",
 	Params: []adt.Param{structParam},
 	Result: adt.StructKind,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		s, ok := args[0].(*adt.Vertex)
 		if !ok {
 			return c.NewErrf("struct argument must be concrete")
@@ -110,10 +116,11 @@ var andBuiltin = &adt.Builtin{
 	Name:   "and",
 	Params: []adt.Param{listParam},
 	Result: adt.IntKind,
-	RawFunc: func(c *adt.OpContext, args []adt.Expr) adt.Value {
-		// Pass through the cycle information from evaluating the first argument.
-		v := c.EvaluateKeepState(args[0])
-		list := c.RawElems(v)
+	RawFunc: func(call *adt.CallContext) adt.Value {
+		c := call.OpContext()
+		arg := call.Expr(0)
+
+		list := c.RawElems(arg)
 		if len(list) == 0 {
 			return &adt.Top{}
 		}
@@ -130,7 +137,10 @@ var orBuiltin = &adt.Builtin{
 	Params:      []adt.Param{listParam},
 	Result:      adt.IntKind,
 	NonConcrete: true,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		d := []adt.Disjunct{}
 		for _, c := range c.RawElems(args[0]) {
 			d = append(d, adt.Disjunct{Val: c, Default: false})
@@ -165,7 +175,10 @@ var divBuiltin = &adt.Builtin{
 	Name:   "div",
 	Params: []adt.Param{intParam, intParam},
 	Result: adt.IntKind,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		const name = "argument to div builtin"
 
 		return intDivOp(c, (*adt.OpContext).IntDiv, name, args)
@@ -176,7 +189,10 @@ var modBuiltin = &adt.Builtin{
 	Name:   "mod",
 	Params: []adt.Param{intParam, intParam},
 	Result: adt.IntKind,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		const name = "argument to mod builtin"
 
 		return intDivOp(c, (*adt.OpContext).IntMod, name, args)
@@ -187,7 +203,10 @@ var quoBuiltin = &adt.Builtin{
 	Name:   "quo",
 	Params: []adt.Param{intParam, intParam},
 	Result: adt.IntKind,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		const name = "argument to quo builtin"
 
 		return intDivOp(c, (*adt.OpContext).IntQuo, name, args)
@@ -198,7 +217,10 @@ var remBuiltin = &adt.Builtin{
 	Name:   "rem",
 	Params: []adt.Param{intParam, intParam},
 	Result: adt.IntKind,
-	Func: func(c *adt.OpContext, args []adt.Value) adt.Expr {
+	Func: func(call *adt.CallContext) adt.Expr {
+		c := call.OpContext()
+		args := call.Args()
+
 		const name = "argument to rem builtin"
 
 		return intDivOp(c, (*adt.OpContext).IntRem, name, args)
