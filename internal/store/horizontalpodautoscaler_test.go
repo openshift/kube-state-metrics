@@ -260,6 +260,30 @@ func TestHPAStore(t *testing.T) {
 			},
 		},
 		{
+			// Verify omitted minReplicas falls back to the API default.
+			Obj: &autoscaling.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "hpa-default-min-replicas",
+					Namespace: "ns1",
+				},
+				Spec: autoscaling.HorizontalPodAutoscalerSpec{
+					MaxReplicas: 3,
+					ScaleTargetRef: autoscaling.CrossVersionObjectReference{
+						Kind: "Deployment",
+						Name: "deployment-default-min",
+					},
+				},
+			},
+			Want: `
+				# HELP kube_horizontalpodautoscaler_spec_min_replicas [STABLE] Lower limit for the number of pods that can be set by the autoscaler, default 1.
+				# TYPE kube_horizontalpodautoscaler_spec_min_replicas gauge
+				kube_horizontalpodautoscaler_spec_min_replicas{horizontalpodautoscaler="hpa-default-min-replicas",namespace="ns1"} 1
+			`,
+			MetricNames: []string{
+				"kube_horizontalpodautoscaler_spec_min_replicas",
+			},
+		},
+		{
 			// Verify populating base metric.
 			AllowAnnotationsList: []string{
 				"app.k8s.io/owner",
@@ -578,6 +602,35 @@ func TestHPAStore(t *testing.T) {
 				"kube_horizontalpodautoscaler_created",
 			},
 		},
+		{
+			// Verify spec.behavior scale up/down tolerance metrics.
+			Obj: &autoscaling.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "hpa1",
+					Namespace: "ns1",
+				},
+				Spec: autoscaling.HorizontalPodAutoscalerSpec{
+					MaxReplicas: 4,
+					Behavior: &autoscaling.HorizontalPodAutoscalerBehavior{
+						ScaleUp: &autoscaling.HPAScalingRules{
+							Tolerance: resourcePtr(resource.MustParse("0.5")),
+						},
+						ScaleDown: &autoscaling.HPAScalingRules{
+							Tolerance: resourcePtr(resource.MustParse("0.25")),
+						},
+					},
+				},
+			},
+			Want: `
+				# HELP kube_horizontalpodautoscaler_spec_behavior_scale_down_tolerance The tolerance on the ratio between the current and desired metric value below which no scale down occurs.
+				# HELP kube_horizontalpodautoscaler_spec_behavior_scale_up_tolerance The tolerance on the ratio between the current and desired metric value below which no scale up occurs.
+				# TYPE kube_horizontalpodautoscaler_spec_behavior_scale_down_tolerance gauge
+				# TYPE kube_horizontalpodautoscaler_spec_behavior_scale_up_tolerance gauge
+				kube_horizontalpodautoscaler_spec_behavior_scale_down_tolerance{horizontalpodautoscaler="hpa1",namespace="ns1"} 0.25
+				kube_horizontalpodautoscaler_spec_behavior_scale_up_tolerance{horizontalpodautoscaler="hpa1",namespace="ns1"} 0.5
+			`,
+			MetricNames: []string{"kube_horizontalpodautoscaler_spec_behavior_scale_up_tolerance", "kube_horizontalpodautoscaler_spec_behavior_scale_down_tolerance"},
+		},
 	}
 	for i, c := range cases {
 		c.Func = generator.ComposeMetricGenFuncs(hpaMetricFamilies(c.AllowAnnotationsList, c.AllowLabelsList))
@@ -594,4 +647,41 @@ func int32ptr(value int32) *int32 {
 
 func resourcePtr(quantity resource.Quantity) *resource.Quantity {
 	return &quantity
+}
+
+// status.currentMetrics is not validated by the API server -- unlike
+// spec.metrics, ValidateHorizontalPodAutoscalerStatusUpdate checks only the
+// replica counts and the conditions -- so the source matching Type can be
+// absent. Generating metrics for such an entry must skip it rather than
+// dereference the nil source, which would panic on the reflector goroutine.
+func TestHPAStatusTargetMetricWithNilSource(t *testing.T) {
+	for _, metricType := range []autoscaling.MetricSourceType{
+		autoscaling.ObjectMetricSourceType,
+		autoscaling.PodsMetricSourceType,
+		autoscaling.ResourceMetricSourceType,
+		autoscaling.ContainerResourceMetricSourceType,
+		autoscaling.ExternalMetricSourceType,
+	} {
+		t.Run(string(metricType), func(t *testing.T) {
+			hpa := &autoscaling.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "hpa", Namespace: "ns"},
+				Status: autoscaling.HorizontalPodAutoscalerStatus{
+					// Type is set, but the matching source is not.
+					CurrentMetrics: []autoscaling.MetricStatus{{Type: metricType}},
+				},
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panic generating metrics for a %s status with no source: %v", metricType, r)
+				}
+			}()
+
+			g := createHPAStatusTargetMetric()
+			family := g.Generate(hpa)
+			if len(family.Metrics) != 0 {
+				t.Errorf("expected the entry to be skipped, got %d metrics", len(family.Metrics))
+			}
+		})
+	}
 }

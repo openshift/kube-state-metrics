@@ -14,6 +14,7 @@ limitations under the License.
 package store
 
 import (
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +34,7 @@ func TestEndpointSliceStore(t *testing.T) {
 	hostname := "host"
 	zone := "west"
 	ready := true
+	serving := true
 	terminating := false
 	addresses := []string{"10.0.0.1", "192.168.1.10"}
 
@@ -96,6 +98,31 @@ func TestEndpointSliceStore(t *testing.T) {
 			},
 		},
 		{
+			// Port is optional and, unlike Name and Protocol, is not defaulted by
+			// the API server: an EndpointSlice that is not used for routing
+			// traffic may omit it.
+			Obj: &discoveryv1.EndpointSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test_endpointslice-ports-without-number",
+					Namespace: "test",
+				},
+				AddressType: "IPv4",
+				Ports: []discoveryv1.EndpointPort{
+					{Name: &portname,
+						Protocol: &portprotocol,
+					},
+				},
+			},
+			Want: `
+					# HELP kube_endpointslice_ports Ports attached to the endpointslice.
+					# TYPE kube_endpointslice_ports gauge
+					kube_endpointslice_ports{endpointslice="test_endpointslice-ports-without-number",port_name="http",port_protocol="TCP",port_number="",namespace="test"} 1
+				`,
+			MetricNames: []string{
+				"kube_endpointslice_ports",
+			},
+		},
+		{
 			Obj: &discoveryv1.EndpointSlice{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test_endpointslice-endpoints",
@@ -108,6 +135,7 @@ func TestEndpointSliceStore(t *testing.T) {
 						Conditions: discoveryv1.EndpointConditions{
 							Ready:       &ready,
 							Terminating: &terminating,
+							Serving:     &serving,
 						},
 						Hostname:  &hostname,
 						Zone:      &zone,
@@ -120,8 +148,8 @@ func TestEndpointSliceStore(t *testing.T) {
 					# HELP kube_endpointslice_endpoints_hints Topology routing hints attached to endpoints
 					# TYPE kube_endpointslice_endpoints gauge
 					# TYPE kube_endpointslice_endpoints_hints gauge
-					kube_endpointslice_endpoints{address="10.0.0.1",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="",namespace="test",ready="true",serving="false",targetref_kind="",targetref_name="",targetref_namespace="",terminating="host"} 1
-					kube_endpointslice_endpoints{address="192.168.1.10",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="",namespace="test",ready="true",serving="false",targetref_kind="",targetref_name="",targetref_namespace="",terminating="host"} 1
+					kube_endpointslice_endpoints{address="10.0.0.1",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="host",namespace="test",ready="true",serving="true",targetref_kind="",targetref_name="",targetref_namespace="",terminating="false"} 1
+					kube_endpointslice_endpoints{address="192.168.1.10",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="host",namespace="test",ready="true",serving="true",targetref_kind="",targetref_name="",targetref_namespace="",terminating="false"} 1
 				  `,
 
 			MetricNames: []string{
@@ -141,6 +169,7 @@ func TestEndpointSliceStore(t *testing.T) {
 						Conditions: discoveryv1.EndpointConditions{
 							Ready:       &ready,
 							Terminating: &terminating,
+							Serving:     &serving,
 						},
 						Hostname:  &hostname,
 						Zone:      &zone,
@@ -159,8 +188,8 @@ func TestEndpointSliceStore(t *testing.T) {
 					# TYPE kube_endpointslice_endpoints gauge
         			# TYPE kube_endpointslice_endpoints_hints gauge
          			kube_endpointslice_endpoints_hints{address="10.0.0.1",endpointslice="test_endpointslice-endpoints",for_zone="zone1",namespace="test"} 1
-        			kube_endpointslice_endpoints{address="10.0.0.1",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="",namespace="test",ready="true",serving="false",targetref_kind="",targetref_name="",targetref_namespace="",terminating="host"} 1
-					kube_endpointslice_endpoints{address="192.168.1.10",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="",namespace="test",ready="true",serving="false",targetref_kind="",targetref_name="",targetref_namespace="",terminating="host"} 1
+         			kube_endpointslice_endpoints{address="10.0.0.1",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="host",namespace="test",ready="true",serving="true",targetref_kind="",targetref_name="",targetref_namespace="",terminating="false"} 1
+					kube_endpointslice_endpoints{address="192.168.1.10",endpoint_nodename="node",endpoint_zone="west",endpointslice="test_endpointslice-endpoints",hostname="host",namespace="test",ready="true",serving="true",targetref_kind="",targetref_name="",targetref_namespace="",terminating="false"} 1
 				`,
 
 			MetricNames: []string{
@@ -202,5 +231,65 @@ func TestEndpointSliceStore(t *testing.T) {
 		if err := c.run(); err != nil {
 			t.Errorf("unexpected collecting result in %vth run:\n%s", i, err)
 		}
+	}
+}
+
+// Each hint gets its own label slices. Building them by appending onto a slice
+// shared across the loop works only while that slice has no spare capacity; with
+// any slack every zone writes into the same backing array and they all report
+// the last one.
+func TestEndpointSliceHintsPerZone(t *testing.T) {
+	es := &discoveryv1.EndpointSlice{
+		ObjectMeta:  metav1.ObjectMeta{Name: "es", Namespace: "ns"},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints: []discoveryv1.Endpoint{{
+			Addresses: []string{"10.0.0.1"},
+			Hints: &discoveryv1.EndpointHints{
+				ForZones: []discoveryv1.ForZone{{Name: "zone-a"}, {Name: "zone-b"}, {Name: "zone-c"}},
+			},
+		}},
+	}
+
+	g := createEndpointsSliceHints()
+	family := g.Generate(es)
+
+	got := []string{}
+	for _, m := range family.Metrics {
+		if len(m.LabelKeys) != len(m.LabelValues) {
+			t.Fatalf("label keys and values differ in length: %v vs %v", m.LabelKeys, m.LabelValues)
+		}
+		for i, k := range m.LabelKeys {
+			if k == "for_zone" {
+				got = append(got, m.LabelValues[i])
+			}
+		}
+	}
+
+	want := []string{"zone-a", "zone-b", "zone-c"}
+	if !slices.Equal(got, want) {
+		t.Errorf("for_zone values: got %v, want %v", got, want)
+	}
+}
+
+// Validation requires at least one address today, so this is defence against a
+// future relaxation rather than a reachable panic.
+func TestEndpointSliceHintsWithoutAddresses(t *testing.T) {
+	es := &discoveryv1.EndpointSlice{
+		ObjectMeta:  metav1.ObjectMeta{Name: "es", Namespace: "ns"},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints: []discoveryv1.Endpoint{{
+			Hints: &discoveryv1.EndpointHints{ForZones: []discoveryv1.ForZone{{Name: "zone-a"}}},
+		}},
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic on an endpoint with no addresses: %v", r)
+		}
+	}()
+
+	g := createEndpointsSliceHints()
+	if family := g.Generate(es); len(family.Metrics) != 0 {
+		t.Errorf("expected the endpoint to be skipped, got %d metrics", len(family.Metrics))
 	}
 }

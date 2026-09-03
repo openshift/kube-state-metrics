@@ -155,6 +155,45 @@ func Test_addPathLabels(t *testing.T) {
 	}
 }
 
+// An index past the end of a list does not resolve, so it must be skipped like
+// any other unresolvable path rather than surfacing as a label value.
+func Test_addPathLabels_indexOutOfRange(t *testing.T) {
+	m := make(map[string]string)
+	addPathLabels(cr, map[string]valuePath{
+		"idx": mustCompilePath(t, "spec", "order", "5"),
+	}, m)
+	assert.Equal(t, map[string]string{}, m)
+}
+
+// compileCommon returns a nil *compiledCommon alongside its error, so a metric
+// whose path fails to compile must report the error rather than panic.
+func Test_newCompiledMetric_compileError(t *testing.T) {
+	// "[Ready]" is a list lookup with no "key=value", which compilePath rejects.
+	// compileCommon compiles both path and labelsFromPath, so either can fail.
+	badPath := MetricMeta{Path: []string{"status", "conditions", "[Ready]"}}
+	badLabels := MetricMeta{LabelsFromPath: map[string][]string{
+		"cond": {"status", "conditions", "[Ready]"},
+	}}
+
+	for _, tt := range []struct {
+		name string
+		m    Metric
+	}{
+		{name: "gauge path", m: Metric{Type: metric.Gauge, Gauge: &MetricGauge{MetricMeta: badPath}}},
+		{name: "info path", m: Metric{Type: metric.Info, Info: &MetricInfo{MetricMeta: badPath}}},
+		{name: "stateSet path", m: Metric{Type: metric.StateSet, StateSet: &MetricStateSet{MetricMeta: badPath}}},
+		{name: "gauge labelsFromPath", m: Metric{Type: metric.Gauge, Gauge: &MetricGauge{MetricMeta: badLabels}}},
+		{name: "info labelsFromPath", m: Metric{Type: metric.Info, Info: &MetricInfo{MetricMeta: badLabels}}},
+		{name: "stateSet labelsFromPath", m: Metric{Type: metric.StateSet, StateSet: &MetricStateSet{MetricMeta: badLabels}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := newCompiledMetric(tt.m)
+			assert.Nil(t, got)
+			assert.ErrorContains(t, err, "invalid list lookup: [Ready]")
+		})
+	}
+}
+
 func Test_values(t *testing.T) {
 	type tc struct {
 		name       string
@@ -333,6 +372,40 @@ func Test_values(t *testing.T) {
 			newEachValue(t, 0, "phase", "bar"),
 			newEachValue(t, 1, "phase", "foo"),
 		}},
+		{name: "stateset nil path", each: &compiledStateSet{
+			compiledCommon: compiledCommon{
+				path: mustCompilePath(t, "does", "not", "exist"),
+			},
+			LabelName: "phase",
+			List:      []string{"foo", "bar"},
+		}, wantResult: nil, wantErrors: nil},
+		{name: "stateset nil valueFrom", each: &compiledStateSet{
+			compiledCommon: compiledCommon{
+				path: mustCompilePath(t, "status"),
+			},
+			ValueFrom: mustCompilePath(t, "does", "not", "exist"),
+			LabelName: "phase",
+			List:      []string{"foo", "bar"},
+		}, wantResult: nil, wantErrors: nil},
+		{name: "stateset non-string value", each: &compiledStateSet{
+			compiledCommon: compiledCommon{
+				path: mustCompilePath(t, "spec", "replicas"),
+			},
+			LabelName: "phase",
+			List:      []string{"1", "2"},
+		}, wantResult: nil, wantErrors: []error{
+			errors.New("[spec,replicas]: expected value for path to be string, got float64"),
+		}},
+		{name: "stateset non-string valueFrom", each: &compiledStateSet{
+			compiledCommon: compiledCommon{
+				path: mustCompilePath(t, "status"),
+			},
+			ValueFrom: mustCompilePath(t, "uptime"),
+			LabelName: "phase",
+			List:      []string{"foo", "bar"},
+		}, wantResult: nil, wantErrors: []error{
+			errors.New("[status,uptime]: expected value for path to be string, got float64"),
+		}},
 		{name: "status_conditions", each: &compiledGauge{
 			compiledCommon: compiledCommon{
 				path: mustCompilePath(t, "status", "conditions", "[type=Ready]", "status"),
@@ -366,7 +439,13 @@ func Test_values(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gotResult, gotErrors := scrapeValuesFor(tt.each, cr)
 			assert.Equal(t, tt.wantResult, gotResult)
-			assert.Equal(t, tt.wantErrors, gotErrors)
+			if tt.wantErrors == nil {
+				assert.Nil(t, gotErrors)
+			} else if assert.Len(t, gotErrors, len(tt.wantErrors)) {
+				for i, wantErr := range tt.wantErrors {
+					assert.EqualError(t, gotErrors[i], wantErr.Error())
+				}
+			}
 		})
 	}
 }

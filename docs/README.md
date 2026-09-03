@@ -44,6 +44,8 @@ See each file for specific documentation about the exposed metrics:
 * [Job Metrics](metrics/workload/job-metrics.md)
 * [Lease Metrics](metrics/cluster/lease-metrics.md)
 * [LimitRange Metrics](metrics/policy/limitrange-metrics.md)
+* [MutatingAdmissionPolicy Metrics](metrics/extend/mutatingadmissionpolicy-metrics.md)
+* [MutatingAdmissionPolicyBinding Metrics](metrics/extend/mutatingadmissionpolicybinding-metrics.md)
 * [MutatingWebhookConfiguration Metrics](metrics/extend/mutatingwebhookconfiguration-metrics.md)
 * [Namespace Metrics](metrics/cluster/namespace-metrics.md)
 * [NetworkPolicy Metrics](metrics/policy/networkpolicy-metrics.md)
@@ -59,6 +61,8 @@ See each file for specific documentation about the exposed metrics:
 * [Service Metrics](metrics/service/service-metrics.md)
 * [StatefulSet Metrics](metrics/workload/statefulset-metrics.md)
 * [StorageClass Metrics](metrics/storage/storageclass-metrics.md)
+* [ValidatingAdmissionPolicy Metrics](metrics/extend/validatingadmissionpolicy-metrics.md)
+* [ValidatingAdmissionPolicyBinding Metrics](metrics/extend/validatingadmissionpolicybinding-metrics.md)
 * [ValidatingWebhookConfiguration Metrics](metrics/extend/validatingwebhookconfiguration-metrics.md)
 * [VolumeAttachment Metrics](metrics/storage/volumeattachment-metrics.md)
 
@@ -98,6 +102,9 @@ sum(kube_pod_container_resource_requests{resource="memory"}) by (namespace, pod,
 ```
 
 ## Metrics from Custom Resources
+
+> [!NOTE]
+> `custom-resource-state` is feature-frozen in favor of [resource-state-metrics](https://github.com/kubernetes-sigs/resource-state-metrics). Once `resource-state-metrics` is stable, `custom-resource-state` will be deprecated.
 
 See [Custom Resource State Metrics](metrics/extend/customresourcestate-metrics.md) for experimental support for custom resources.
 

@@ -18,10 +18,12 @@ package store
 
 import (
 	"context"
+	"net/netip"
+	"slices"
 	"strconv"
 
 	basemetrics "k8s.io/component-base/metrics"
-	"k8s.io/utils/net"
+	"k8s.io/component-helpers/storage/ephemeral"
 
 	"k8s.io/kube-state-metrics/v2/pkg/constant"
 	"k8s.io/kube-state-metrics/v2/pkg/metric"
@@ -36,8 +38,10 @@ import (
 )
 
 var (
-	descPodLabelsDefaultLabels = []string{"namespace", "pod", "uid"}
-	podStatusReasons           = []string{"Evicted", "NodeAffinity", "NodeLost", "PreemptionByScheduler", "SchedulingGated", "Shutdown", "TerminationByKubelet", "UnexpectedAdmissionError"}
+	descPodLabelsDefaultLabels    = []string{"namespace", "pod", "uid"}
+	podStatusReasons              = []string{"Evicted", "NodeAffinity", "NodeLost", "PreemptionByScheduler", "SchedulingGated", "Shutdown", "TerminationByKubelet", "UnexpectedAdmissionError"}
+	podDisruptionConditionReasons = []string{v1.PodReasonPreemptionByScheduler, "DeletionByTaintManager", "EvictionByEvictionAPI", "DeletionByPodGC", v1.PodReasonTerminationByKubelet}
+	descPodIPsLabelKeys           = []string{"ip", "ip_family"}
 )
 
 func podMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generator.FamilyGenerator {
@@ -64,7 +68,10 @@ func podMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generat
 		createPodInitContainerInfoFamilyGenerator(),
 		createPodInitContainerResourceLimitsFamilyGenerator(),
 		createPodInitContainerResourceRequestsFamilyGenerator(),
+		createPodInitContainerStateStartedFamilyGenerator(),
 		createPodInitContainerStatusLastTerminatedReasonFamilyGenerator(),
+		createPodInitContainerStatusLastTerminatedExitCodeFamilyGenerator(),
+		createPodInitContainerStatusLastTerminatedTimestampFamilyGenerator(),
 		createPodInitContainerStatusReadyFamilyGenerator(),
 		createPodInitContainerStatusRestartsTotalFamilyGenerator(),
 		createPodInitContainerStatusRunningFamilyGenerator(),
@@ -77,6 +84,7 @@ func podMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generat
 		createPodOverheadCPUCoresFamilyGenerator(),
 		createPodOverheadMemoryBytesFamilyGenerator(),
 		createPodOwnerFamilyGenerator(),
+		createPodResourceClaimInfoFamilyGenerator(),
 		createPodRestartPolicyFamilyGenerator(),
 		createPodRuntimeClassNameInfoFamilyGenerator(),
 		createPodSpecVolumesPersistentVolumeClaimsInfoFamilyGenerator(),
@@ -89,6 +97,7 @@ func podMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generat
 		createPodStatusInitializedTimeFamilyGenerator(),
 		createPodStatusContainerReadyTimeFamilyGenerator(),
 		createPodStatusReasonFamilyGenerator(),
+		createPodStatusDisruptionReasonFamilyGenerator(),
 		createPodStatusScheduledFamilyGenerator(),
 		createPodStatusScheduledTimeFamilyGenerator(),
 		createPodStatusUnschedulableFamilyGenerator(),
@@ -661,6 +670,62 @@ func createPodInfoFamilyGenerator() generator.FamilyGenerator {
 	)
 }
 
+func createPodResourceClaimInfoFamilyGenerator() generator.FamilyGenerator {
+	return *generator.NewFamilyGeneratorWithStability(
+		"kube_pod_resourceclaim_info",
+		"Information about a DRA ResourceClaim referenced by a pod, one series per pod.spec.resourceClaims entry; claim_name is the pod-local reference and resourceclaim_name is the resolved ResourceClaim object name.",
+		metric.Gauge,
+		basemetrics.ALPHA,
+		"",
+		wrapPodFunc(func(p *v1.Pod) *metric.Family {
+			if len(p.Spec.ResourceClaims) == 0 {
+				return &metric.Family{}
+			}
+
+			// Template-generated claims have their resolved object name written
+			// into pod.status.resourceClaimStatuses by the kubelet.
+			resolved := make(map[string]string, len(p.Status.ResourceClaimStatuses))
+			for _, s := range p.Status.ResourceClaimStatuses {
+				if s.ResourceClaimName != nil {
+					resolved[s.Name] = *s.ResourceClaimName
+				}
+			}
+
+			ms := make([]*metric.Metric, 0, len(p.Spec.ResourceClaims))
+			for _, rc := range p.Spec.ResourceClaims {
+				// The API guarantees exactly one of ResourceClaimName /
+				// ResourceClaimTemplateName is set; skip a malformed entry that
+				// has neither, since it references no claim to report.
+				if rc.ResourceClaimName == nil && rc.ResourceClaimTemplateName == nil {
+					continue
+				}
+
+				var resourceClaimName, resourceClaimTemplateName string
+				if rc.ResourceClaimName != nil {
+					resourceClaimName = *rc.ResourceClaimName
+				} else {
+					// Template-backed claim: the resolved name comes from status and
+					// stays empty while the claim is still pending creation.
+					resourceClaimName = resolved[rc.Name]
+				}
+				if rc.ResourceClaimTemplateName != nil {
+					resourceClaimTemplateName = *rc.ResourceClaimTemplateName
+				}
+
+				ms = append(ms, &metric.Metric{
+					LabelKeys:   []string{"claim_name", "resourceclaim_name", "resourceclaim_template_name"},
+					LabelValues: []string{rc.Name, resourceClaimName, resourceClaimTemplateName},
+					Value:       1,
+				})
+			}
+
+			return &metric.Family{
+				Metrics: ms,
+			}
+		}),
+	)
+}
+
 func createPodIPFamilyGenerator() generator.FamilyGenerator {
 	return *generator.NewFamilyGeneratorWithStability(
 		"kube_pod_ips",
@@ -669,25 +734,28 @@ func createPodIPFamilyGenerator() generator.FamilyGenerator {
 		basemetrics.ALPHA,
 		"",
 		wrapPodFunc(func(p *v1.Pod) *metric.Family {
-			ms := make([]*metric.Metric, len(p.Status.PodIPs))
-			labelKeys := []string{"ip", "ip_family"}
+			ms := make([]*metric.Metric, 0, len(p.Status.PodIPs))
 
-			for i, ip := range p.Status.PodIPs {
-				netIP := net.ParseIPSloppy(ip.IP)
-				var ipFamily net.IPFamily
+			for _, ip := range p.Status.PodIPs {
+				addr, err := netip.ParseAddr(ip.IP)
+				if err != nil {
+					continue // indicates failure to parse, so we don't include that in our metrics series
+				}
+				addr = addr.Unmap()
+				var ipFamily string
 				switch {
-				case net.IsIPv4(netIP):
-					ipFamily = net.IPv4
-				case net.IsIPv6(netIP):
-					ipFamily = net.IPv6
+				case addr.Is4():
+					ipFamily = "4"
+				case addr.Is6():
+					ipFamily = "6"
 				default:
-					continue // nil from ParseIPSloppy indicates failure to parse, so we don't include that in our metrics series
+					continue
 				}
-				ms[i] = &metric.Metric{
-					LabelKeys:   labelKeys,
-					LabelValues: []string{ip.IP, string(ipFamily)},
+				ms = append(ms, &metric.Metric{
+					LabelKeys:   descPodIPsLabelKeys,
+					LabelValues: []string{ip.IP, ipFamily},
 					Value:       1,
-				}
+				})
 			}
 
 			return &metric.Family{
@@ -1061,6 +1129,91 @@ func createPodInitContainerStatusWaitingReasonFamilyGenerator() generator.Family
 	)
 }
 
+func createPodInitContainerStateStartedFamilyGenerator() generator.FamilyGenerator {
+	return *generator.NewFamilyGeneratorWithStability(
+		"kube_pod_init_container_state_started",
+		"Start time in unix timestamp for a pod init container.",
+		metric.Gauge,
+		basemetrics.ALPHA,
+		"",
+		wrapPodFunc(func(p *v1.Pod) *metric.Family {
+			ms := []*metric.Metric{}
+
+			for _, cs := range p.Status.InitContainerStatuses {
+				if cs.State.Running != nil {
+					ms = append(ms, &metric.Metric{
+						LabelKeys:   []string{"container"},
+						LabelValues: []string{cs.Name},
+						Value:       float64((cs.State.Running.StartedAt).Unix()),
+					})
+				} else if cs.State.Terminated != nil {
+					ms = append(ms, &metric.Metric{
+						LabelKeys:   []string{"container"},
+						LabelValues: []string{cs.Name},
+						Value:       float64((cs.State.Terminated.StartedAt).Unix()),
+					})
+				}
+			}
+
+			return &metric.Family{
+				Metrics: ms,
+			}
+		}),
+	)
+}
+
+func createPodInitContainerStatusLastTerminatedExitCodeFamilyGenerator() generator.FamilyGenerator {
+	return *generator.NewFamilyGeneratorWithStability(
+		"kube_pod_init_container_status_last_terminated_exitcode",
+		"Describes the exit code for the last init container in terminated state.",
+		metric.Gauge,
+		basemetrics.ALPHA,
+		"",
+		wrapPodFunc(func(p *v1.Pod) *metric.Family {
+			ms := make([]*metric.Metric, 0, len(p.Status.InitContainerStatuses))
+			for _, cs := range p.Status.InitContainerStatuses {
+				if cs.LastTerminationState.Terminated != nil {
+					ms = append(ms, &metric.Metric{
+						LabelKeys:   []string{"container"},
+						LabelValues: []string{cs.Name},
+						Value:       float64(cs.LastTerminationState.Terminated.ExitCode),
+					})
+				}
+			}
+
+			return &metric.Family{
+				Metrics: ms,
+			}
+		}),
+	)
+}
+
+func createPodInitContainerStatusLastTerminatedTimestampFamilyGenerator() generator.FamilyGenerator {
+	return *generator.NewFamilyGeneratorWithStability(
+		"kube_pod_init_container_status_last_terminated_timestamp",
+		"Last terminated time for a pod init container in unix timestamp.",
+		metric.Gauge,
+		basemetrics.ALPHA,
+		"",
+		wrapPodFunc(func(p *v1.Pod) *metric.Family {
+			ms := make([]*metric.Metric, 0, len(p.Status.InitContainerStatuses))
+			for _, cs := range p.Status.InitContainerStatuses {
+				if cs.LastTerminationState.Terminated != nil {
+					ms = append(ms, &metric.Metric{
+						LabelKeys:   []string{"container"},
+						LabelValues: []string{cs.Name},
+						Value:       float64(cs.LastTerminationState.Terminated.FinishedAt.Unix()),
+					})
+				}
+			}
+
+			return &metric.Family{
+				Metrics: ms,
+			}
+		}),
+	)
+}
+
 func createPodAnnotationsGenerator(allowAnnotations []string) generator.FamilyGenerator {
 	return *generator.NewFamilyGeneratorWithStability(
 		"kube_pod_annotations",
@@ -1259,7 +1412,7 @@ func createPodRuntimeClassNameInfoFamilyGenerator() generator.FamilyGenerator {
 func createPodSpecVolumesPersistentVolumeClaimsInfoFamilyGenerator() generator.FamilyGenerator {
 	return *generator.NewFamilyGeneratorWithStability(
 		"kube_pod_spec_volumes_persistentvolumeclaims_info",
-		"Information about persistentvolumeclaim volumes in a pod.",
+		"Information about persistentvolumeclaim and ephemeral volumes in a pod.",
 		metric.Gauge,
 		basemetrics.STABLE,
 		"",
@@ -1269,8 +1422,14 @@ func createPodSpecVolumesPersistentVolumeClaimsInfoFamilyGenerator() generator.F
 			for _, v := range p.Spec.Volumes {
 				if v.PersistentVolumeClaim != nil {
 					ms = append(ms, &metric.Metric{
-						LabelKeys:   []string{"volume", "persistentvolumeclaim"},
-						LabelValues: []string{v.Name, v.PersistentVolumeClaim.ClaimName},
+						LabelKeys:   []string{"volume", "persistentvolumeclaim", "ephemeral"},
+						LabelValues: []string{v.Name, v.PersistentVolumeClaim.ClaimName, "false"},
+						Value:       1,
+					})
+				} else if v.Ephemeral != nil {
+					ms = append(ms, &metric.Metric{
+						LabelKeys:   []string{"volume", "persistentvolumeclaim", "ephemeral"},
+						LabelValues: []string{v.Name, ephemeral.VolumeClaimName(p, &v), "true"},
 						Value:       1,
 					})
 				}
@@ -1286,7 +1445,7 @@ func createPodSpecVolumesPersistentVolumeClaimsInfoFamilyGenerator() generator.F
 func createPodSpecVolumesPersistentVolumeClaimsReadonlyFamilyGenerator() generator.FamilyGenerator {
 	return *generator.NewFamilyGeneratorWithStability(
 		"kube_pod_spec_volumes_persistentvolumeclaims_readonly",
-		"Describes whether a persistentvolumeclaim is mounted read only.",
+		"Describes whether a persistentvolumeclaim is mounted read only. Ephemeral volumes always report 0 since the ephemeral volume source does not support a read-only flag.",
 		metric.Gauge,
 		basemetrics.STABLE,
 		"",
@@ -1296,9 +1455,15 @@ func createPodSpecVolumesPersistentVolumeClaimsReadonlyFamilyGenerator() generat
 			for _, v := range p.Spec.Volumes {
 				if v.PersistentVolumeClaim != nil {
 					ms = append(ms, &metric.Metric{
-						LabelKeys:   []string{"volume", "persistentvolumeclaim"},
-						LabelValues: []string{v.Name, v.PersistentVolumeClaim.ClaimName},
+						LabelKeys:   []string{"volume", "persistentvolumeclaim", "ephemeral"},
+						LabelValues: []string{v.Name, v.PersistentVolumeClaim.ClaimName, "false"},
 						Value:       boolFloat64(v.PersistentVolumeClaim.ReadOnly),
+					})
+				} else if v.Ephemeral != nil {
+					ms = append(ms, &metric.Metric{
+						LabelKeys:   []string{"volume", "persistentvolumeclaim", "ephemeral"},
+						LabelValues: []string{v.Name, ephemeral.VolumeClaimName(p, &v), "true"},
+						Value:       0,
 					})
 				}
 			}
@@ -1542,12 +1707,22 @@ func createPodStatusReasonFamilyGenerator() generator.FamilyGenerator {
 			ms := []*metric.Metric{}
 
 			for _, reason := range podStatusReasons {
-				m := &metric.Metric{
+				if !hasPodStatusReason(p, reason) {
+					continue
+				}
+				ms = append(ms, &metric.Metric{
 					LabelKeys:   []string{"reason"},
 					LabelValues: []string{reason},
-					Value:       getPodStatusReasonValue(p, reason),
-				}
-				ms = append(ms, m)
+					Value:       1,
+				})
+			}
+
+			if p.Status.Reason != "" && !slices.Contains(podStatusReasons, p.Status.Reason) {
+				ms = append(ms, &metric.Metric{
+					LabelKeys:   []string{"reason"},
+					LabelValues: []string{"Other"},
+					Value:       1,
+				})
 			}
 
 			return &metric.Family{
@@ -1557,21 +1732,53 @@ func createPodStatusReasonFamilyGenerator() generator.FamilyGenerator {
 	)
 }
 
-func getPodStatusReasonValue(p *v1.Pod, reason string) float64 {
+func hasPodStatusReason(p *v1.Pod, reason string) bool {
 	if p.Status.Reason == reason {
-		return 1
+		return true
 	}
 	for _, cond := range p.Status.Conditions {
 		if cond.Reason == reason {
-			return 1
+			return true
 		}
 	}
 	for _, cs := range p.Status.ContainerStatuses {
 		if cs.State.Terminated != nil && cs.State.Terminated.Reason == reason {
-			return 1
+			return true
 		}
 	}
-	return 0
+	return false
+}
+
+func createPodStatusDisruptionReasonFamilyGenerator() generator.FamilyGenerator {
+	return *generator.NewFamilyGeneratorWithStability(
+		"kube_pod_status_disruption_reason",
+		"The pod disruption condition reason",
+		metric.Gauge,
+		basemetrics.ALPHA,
+		"",
+		wrapPodFunc(func(p *v1.Pod) *metric.Family {
+			ms := []*metric.Metric{}
+
+			for _, cond := range p.Status.Conditions {
+				if cond.Type != v1.DisruptionTarget {
+					continue
+				}
+				reason := cond.Reason
+				if !slices.Contains(podDisruptionConditionReasons, reason) {
+					reason = "Other"
+				}
+				ms = append(ms, &metric.Metric{
+					LabelKeys:   []string{"reason"},
+					LabelValues: []string{reason},
+					Value:       1,
+				})
+			}
+
+			return &metric.Family{
+				Metrics: ms,
+			}
+		}),
+	)
 }
 
 func createPodStatusScheduledFamilyGenerator() generator.FamilyGenerator {
