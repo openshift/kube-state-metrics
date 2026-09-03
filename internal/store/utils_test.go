@@ -18,10 +18,12 @@ package store
 
 import (
 	"fmt"
-	"reflect"
+	"slices"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
+
+	"k8s.io/kube-state-metrics/v2/pkg/options"
 )
 
 func TestIsHugePageSizeFromResourceName(t *testing.T) {
@@ -243,6 +245,26 @@ func TestKubeLabelsToPrometheusLabels(t *testing.T) {
 				"snake_case",
 			},
 		},
+		{
+			// A key that sanitizes straight onto the name the conflict suffix
+			// would generate. Prometheus rejects a sample carrying the same
+			// label name twice, so the suffix has to skip past it.
+			kubeLabels: map[string]string{
+				"A.b.conflict1": "already_taken",
+				"a-b":           "dash",
+				"a.b":           "dot",
+			},
+			expectKeys: []string{
+				"label_a_b_conflict1",
+				"label_a_b_conflict2",
+				"label_a_b_conflict3",
+			},
+			expectValues: []string{
+				"already_taken",
+				"dash",
+				"dot",
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -310,12 +332,254 @@ func TestMergeKeyValues(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			gotKeys, gotValues := mergeKeyValues(tc.keyValuePairSlices...)
-			if !reflect.DeepEqual(gotKeys, tc.expectKeys) {
+			if !slices.Equal(gotKeys, tc.expectKeys) {
 				t.Errorf("mergeKeyValues() got = %v, want %v", gotKeys, tc.expectKeys)
 			}
-			if !reflect.DeepEqual(gotValues, tc.expectValues) {
+			if !slices.Equal(gotValues, tc.expectValues) {
 				t.Errorf("mergeKeyValues() got1 = %v, want %v", gotValues, tc.expectValues)
 			}
 		})
 	}
+}
+
+func TestCreatePrometheusLabelKeysValues(t *testing.T) {
+	testCases := []struct {
+		name         string
+		kubeData     map[string]string
+		allowList    []string
+		expectKeys   []string
+		expectValues []string
+	}{
+		{
+			name: "allMatches",
+			kubeData: map[string]string{
+				"keyA": "valueA",
+				"keyB": "valueB",
+			},
+			allowList:    []string{"keyA", "keyB"},
+			expectKeys:   []string{"metric_key_a", "metric_key_b"},
+			expectValues: []string{"valueA", "valueB"},
+		},
+		{
+			name: "additionalAllow",
+			kubeData: map[string]string{
+				"keyA": "valueA",
+				"keyB": "valueB",
+			},
+			allowList:    []string{"keyA", "keyB", "keyC"},
+			expectKeys:   []string{"metric_key_a", "metric_key_b"},
+			expectValues: []string{"valueA", "valueB"},
+		},
+		{
+			name: "partialMatches",
+			kubeData: map[string]string{
+				"keyA": "valueA",
+				"keyB": "valueB",
+			},
+			allowList:    []string{"keyA", "keyC"},
+			expectKeys:   []string{"metric_key_a"},
+			expectValues: []string{"valueA"},
+		},
+		{
+			name: "wildcardAsSuffix",
+			kubeData: map[string]string{
+				"keyA":      "valueA",
+				"keyB":      "valueB",
+				"otherKeyA": "valueC",
+				"otherKeyB": "valueD",
+			},
+			allowList:    []string{"key*"},
+			expectKeys:   []string{"metric_key_a", "metric_key_b"},
+			expectValues: []string{"valueA", "valueB"},
+		},
+		{
+			name: "wildcardAsPrefix",
+			kubeData: map[string]string{
+				"keyA":      "valueA",
+				"keyB":      "valueB",
+				"otherKeyA": "valueC",
+				"otherKeyB": "valueD",
+			},
+			allowList:    []string{"*A"},
+			expectKeys:   []string{"metric_key_a", "metric_other_key_a"},
+			expectValues: []string{"valueA", "valueC"},
+		},
+		{
+			name: "onlyFullWildcard",
+			kubeData: map[string]string{
+				"keyA":      "valueA",
+				"keyB":      "valueB",
+				"otherKeyA": "valueC",
+				"otherKeyB": "valueD",
+			},
+			allowList:    []string{"*"},
+			expectKeys:   []string{"metric_key_a", "metric_key_b", "metric_other_key_a", "metric_other_key_b"},
+			expectValues: []string{"valueA", "valueB", "valueC", "valueD"},
+		},
+		{
+			name: "additionalFullWildcard",
+			kubeData: map[string]string{
+				"keyA":      "valueA",
+				"keyB":      "valueB",
+				"otherKeyA": "valueC",
+				"otherKeyB": "valueD",
+			},
+			allowList:    []string{"keyA", "*"},
+			expectKeys:   []string{"metric_key_a"},
+			expectValues: []string{"valueA"},
+		},
+		{
+			// "*key*" has two wildcards; without the over-wildcard guard it would be truncated
+			// to "^.*key$" and match keys ending in "key" — verify it matches nothing instead.
+			name: "multipleWildcards",
+			kubeData: map[string]string{
+				"keyA":      "valueA",
+				"keyB":      "valueB",
+				"otherKeyA": "valueC",
+				"somekey":   "valueD",
+			},
+			allowList:    []string{"*key*"},
+			expectKeys:   []string{},
+			expectValues: []string{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotKeys, gotValues := createPrometheusLabelKeysValues("metric", tc.kubeData, tc.allowList)
+			if !slices.Equal(gotKeys, tc.expectKeys) {
+				t.Errorf("createPrometheusLabelKeysValues() got = %v, want %v", gotKeys, tc.expectKeys)
+			}
+			if !slices.Equal(gotValues, tc.expectValues) {
+				t.Errorf("createPrometheusLabelKeysValues() got1 = %v, want %v", gotValues, tc.expectValues)
+			}
+		})
+	}
+}
+
+func TestCachedCompileAllowListPattern(t *testing.T) {
+	t.Run("valid pattern returns non-nil regexp", func(t *testing.T) {
+		re := cachedCompileAllowListPattern("app*")
+		if re == nil {
+			t.Error("expected non-nil regexp for valid pattern")
+		}
+	})
+
+	t.Run("returned regexp matches correctly", func(t *testing.T) {
+		re := cachedCompileAllowListPattern("app*")
+		if !re.MatchString("app.kubernetes.io/name") {
+			t.Error("expected pattern app* to match app.kubernetes.io/name")
+		}
+		if re.MatchString("other") {
+			t.Error("expected pattern app* not to match 'other'")
+		}
+	})
+
+	t.Run("same pattern returns same cached regexp instance", func(t *testing.T) {
+		pattern := "cached-test-pattern*"
+		re1 := cachedCompileAllowListPattern(pattern)
+		re2 := cachedCompileAllowListPattern(pattern)
+		if re1 != re2 {
+			t.Error("expected the same *regexp.Regexp pointer on second call (cache hit)")
+		}
+	})
+
+	t.Run("pattern exceeding wildcard limit returns nil", func(t *testing.T) {
+		// "*key*" has two wildcards; without the rejection guard expandWildcard would silently
+		// truncate it to "^.*key$" and match keys ending in "key".
+		re := cachedCompileAllowListPattern("*key*")
+		if re != nil {
+			t.Errorf("expected nil for over-wildcarded pattern, got %v", re)
+		}
+	})
+
+	t.Run("pre-cached nil entry returns nil without recompiling", func(t *testing.T) {
+		pattern := "nil-sentinel-pattern*"
+		expanded := expandWildcard(pattern, options.MaxPartialWildcardsPerLabel)
+		allowListPatternCache.Store(expanded, nil)
+		t.Cleanup(func() { allowListPatternCache.Delete(expanded) })
+
+		re := cachedCompileAllowListPattern(pattern)
+		if re != nil {
+			t.Error("expected nil for pre-cached failed pattern")
+		}
+	})
+}
+
+func TestExpandWildcard(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected string
+		limit    uint
+	}{
+		{
+			input:    "foo",
+			expected: "^foo$",
+			limit:    1,
+		},
+		{
+			input:    "foo*",
+			expected: "^foo.*$",
+			limit:    1,
+		},
+		{
+			input:    "*foo",
+			expected: "^.*foo$",
+			limit:    1,
+		},
+		{
+			input:    "*foo*",
+			expected: "^.*foo$",
+			limit:    1,
+		},
+		{
+			input:    "*foo*",
+			expected: "^.*foo.*$",
+			limit:    2,
+		},
+		{
+			input:    "*foo*",
+			expected: "^.*foo.*$",
+			limit:    3,
+		},
+		{
+			input:    "*f*o*o*",
+			expected: "^.*f.*o.*o$",
+			limit:    3,
+		},
+	}
+
+	for i, tc := range testCases {
+		t.Run(fmt.Sprintf("test %d", i), func(t *testing.T) {
+			got := expandWildcard(tc.input, tc.limit)
+			if got != tc.expected {
+				t.Errorf("expandWildcard() got = %v, want %v", got, tc.expected)
+			}
+		})
+	}
+}
+
+func BenchmarkMapToPrometheusLabels(b *testing.B) {
+	for _, n := range []int{4, 8, 32} {
+		labels := make(map[string]string, n)
+		for i := 0; i < n; i++ {
+			labels[fmt.Sprintf("app.kubernetes.io/component-%d", i)] = fmt.Sprintf("value-%d", i)
+		}
+
+		b.Run(fmt.Sprintf("labels-%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, _ = mapToPrometheusLabels(labels, "label")
+			}
+		})
+	}
+
+	// Keys that sanitize to the same Prometheus label name exercise the conflict path.
+	conflicting := map[string]string{"foo.bar": "a", "foo_bar": "b", "foo-bar": "c", "other": "d"}
+	b.Run("conflicts", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_, _ = mapToPrometheusLabels(conflicting, "label")
+		}
+	})
 }

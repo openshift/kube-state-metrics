@@ -83,3 +83,102 @@ func TestObjectsSameNameDifferentNamespaces(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsStoreResourceVersion(t *testing.T) {
+	ms := NewMetricsStore([]string{}, func(_ interface{}) []metric.FamilyInterface { return nil })
+
+	// Test Add
+	s1 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:             "uid1",
+			ResourceVersion: "123",
+		},
+	}
+	if err := ms.Add(s1); err != nil {
+		t.Fatal(err)
+	}
+	if rv := ms.LastStoreSyncResourceVersion(); rv != "123" {
+		t.Fatalf("expected resource version 123, got %v", rv)
+	}
+
+	// Test Update
+	s1.ResourceVersion = "124"
+	if err := ms.Update(s1); err != nil {
+		t.Fatal(err)
+	}
+	if rv := ms.LastStoreSyncResourceVersion(); rv != "124" {
+		t.Fatalf("expected resource version 124, got %v", rv)
+	}
+
+	// Test Delete
+	s1.ResourceVersion = "125"
+	if err := ms.Delete(s1); err != nil {
+		t.Fatal(err)
+	}
+	if rv := ms.LastStoreSyncResourceVersion(); rv != "125" {
+		t.Fatalf("expected resource version 125, got %v", rv)
+	}
+
+	// Test Bookmark
+	ms.Bookmark("126")
+	if rv := ms.LastStoreSyncResourceVersion(); rv != "126" {
+		t.Fatalf("expected resource version 126, got %v", rv)
+	}
+
+	// Test Replace
+	if err := ms.Replace([]interface{}{}, "127"); err != nil {
+		t.Fatal(err)
+	}
+	s2 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:             "uid2",
+			ResourceVersion: "1",
+		},
+	}
+	if err := ms.Replace([]interface{}{s2}, "127"); err != nil {
+		t.Fatal(err)
+	}
+	if rv := ms.LastStoreSyncResourceVersion(); rv != "127" {
+		t.Fatalf("expected resource version 127, got %v", rv)
+	}
+}
+
+func BenchmarkAdd(b *testing.B) {
+	const nFamilies = 50
+
+	headers := make([]string, nFamilies)
+	genFunc := func(obj interface{}) []metric.FamilyInterface {
+		o, _ := meta.Accessor(obj)
+		families := make([]metric.FamilyInterface, nFamilies)
+		for j := 0; j < nFamilies; j++ {
+			families[j] = &metric.Family{
+				Name: fmt.Sprintf("kube_bench_metric_%d", j),
+				Metrics: []*metric.Metric{
+					{
+						LabelKeys:   []string{"namespace", "service", "uid"},
+						LabelValues: []string{o.GetNamespace(), o.GetName(), string(o.GetUID())},
+						Value:       float64(j),
+					},
+				},
+			}
+		}
+		return families
+	}
+
+	store := NewMetricsStore(headers, genFunc)
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:       types.UID("uid-0"),
+			Name:      "svc-0",
+			Namespace: "default",
+		},
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := store.Add(svc); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -25,13 +25,13 @@ case $(uname -m) in
 esac
 
 NODE_IMAGE_NAME="docker.io/kindest/node"
-KUBERNETES_VERSION=${KUBERNETES_VERSION:-"v1.35.0"}
+KUBERNETES_VERSION=${KUBERNETES_VERSION:-"v1.36.1"}
 KUBE_STATE_METRICS_LOG_DIR=./log
 KUBE_STATE_METRICS_CURRENT_IMAGE_NAME="registry.k8s.io/kube-state-metrics/kube-state-metrics"
 KUBE_STATE_METRICS_IMAGE_NAME="registry.k8s.io/kube-state-metrics/kube-state-metrics-${ARCH}"
 E2E_SETUP_KIND=${E2E_SETUP_KIND:-}
 E2E_SETUP_KUBECTL=${E2E_SETUP_KUBECTL:-}
-KIND_VERSION=v0.31.0
+KIND_VERSION=v0.32.0
 SUDO=${SUDO:-}
 
 OS=$(uname -s | awk '{print tolower($0)}')
@@ -103,8 +103,14 @@ function kube_pod_up() {
     is_pod_running="false"
 
     for _ in {1..90}; do # timeout for 3 minutes
-        kubectl get pods -A | grep "$1" 1>/dev/null 2>&1
-        if [[ $? -ne 1 ]]; then
+        # Test the pipeline inside the condition. As a bare statement it is
+        # subject to `set -e`, so the first poll that finds nothing ends the
+        # script before the retry below is ever reached.
+        #
+        # Not `grep -q`: it stops reading at the first match, so kubectl can be
+        # killed by SIGPIPE, and `set -o pipefail` then reports the whole
+        # pipeline as failed even though the pod was found.
+        if kubectl get pods -A | grep "$1" 1>/dev/null 2>&1; then
             is_pod_running="true"
             break
         fi

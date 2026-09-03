@@ -22,10 +22,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/kube-state-metrics/v2/pkg/optin"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/exporter-toolkit/web"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -232,7 +234,10 @@ func TestFullScrapeCycle(t *testing.T) {
 # HELP kube_pod_init_container_info [STABLE] Information about an init container in a pod.
 # HELP kube_pod_init_container_resource_limits The number of requested limit resource by an init container.
 # HELP kube_pod_init_container_resource_requests The number of requested request resource by an init container.
+# HELP kube_pod_init_container_state_started Start time in unix timestamp for a pod init container.
+# HELP kube_pod_init_container_status_last_terminated_exitcode Describes the exit code for the last init container in terminated state.
 # HELP kube_pod_init_container_status_last_terminated_reason Describes the last reason the init container was in terminated state.
+# HELP kube_pod_init_container_status_last_terminated_timestamp Last terminated time for a pod init container in unix timestamp.
 # HELP kube_pod_init_container_status_ready [STABLE] Describes whether the init containers readiness check succeeded.
 # HELP kube_pod_init_container_status_restarts_total [STABLE] The number of restarts for the init container.
 # HELP kube_pod_init_container_status_running [STABLE] Describes whether the init container is currently in running state.
@@ -244,15 +249,17 @@ func TestFullScrapeCycle(t *testing.T) {
 # HELP kube_pod_labels [STABLE] Kubernetes labels converted to Prometheus labels.
 # HELP kube_pod_overhead_cpu_cores The pod overhead in regards to cpu cores associated with running a pod.
 # HELP kube_pod_overhead_memory_bytes The pod overhead in regards to memory associated with running a pod.
+# HELP kube_pod_resourceclaim_info Information about a DRA ResourceClaim referenced by a pod, one series per pod.spec.resourceClaims entry; claim_name is the pod-local reference and resourceclaim_name is the resolved ResourceClaim object name.
 # HELP kube_pod_runtimeclass_name_info The runtimeclass associated with the pod.
 # HELP kube_pod_scheduler The scheduler for a pod.
 # HELP kube_pod_service_account The service account for a pod.
 # HELP kube_pod_owner [STABLE] Information about the Pod's owner.
 # HELP kube_pod_restart_policy [STABLE] Describes the restart policy in use by this pod.
-# HELP kube_pod_spec_volumes_persistentvolumeclaims_info [STABLE] Information about persistentvolumeclaim volumes in a pod.
-# HELP kube_pod_spec_volumes_persistentvolumeclaims_readonly [STABLE] Describes whether a persistentvolumeclaim is mounted read only.
+# HELP kube_pod_spec_volumes_persistentvolumeclaims_info [STABLE] Information about persistentvolumeclaim and ephemeral volumes in a pod.
+# HELP kube_pod_spec_volumes_persistentvolumeclaims_readonly [STABLE] Describes whether a persistentvolumeclaim is mounted read only. Ephemeral volumes always report 0 since the ephemeral volume source does not support a read-only flag.
 # HELP kube_pod_start_time [STABLE] Start time in unix timestamp for a pod.
 # HELP kube_pod_status_container_ready_time Readiness achieved time in unix timestamp for a pod containers.
+# HELP kube_pod_status_disruption_reason The pod disruption condition reason
 # HELP kube_pod_status_initialized_time Initialized time in unix timestamp for a pod.
 # HELP kube_pod_status_qos_class The pods current qosClass.
 # HELP kube_pod_status_phase [STABLE] The pods current phase.
@@ -286,7 +293,10 @@ func TestFullScrapeCycle(t *testing.T) {
 # TYPE kube_pod_init_container_info gauge
 # TYPE kube_pod_init_container_resource_limits gauge
 # TYPE kube_pod_init_container_resource_requests gauge
+# TYPE kube_pod_init_container_state_started gauge
+# TYPE kube_pod_init_container_status_last_terminated_exitcode gauge
 # TYPE kube_pod_init_container_status_last_terminated_reason gauge
+# TYPE kube_pod_init_container_status_last_terminated_timestamp gauge
 # TYPE kube_pod_init_container_status_ready gauge
 # TYPE kube_pod_init_container_status_restarts_total counter
 # TYPE kube_pod_init_container_status_running gauge
@@ -298,6 +308,7 @@ func TestFullScrapeCycle(t *testing.T) {
 # TYPE kube_pod_labels gauge
 # TYPE kube_pod_overhead_cpu_cores gauge
 # TYPE kube_pod_overhead_memory_bytes gauge
+# TYPE kube_pod_resourceclaim_info gauge
 # TYPE kube_pod_runtimeclass_name_info gauge
 # TYPE kube_pod_scheduler gauge
 # TYPE kube_pod_service_account gauge
@@ -307,6 +318,7 @@ func TestFullScrapeCycle(t *testing.T) {
 # TYPE kube_pod_spec_volumes_persistentvolumeclaims_readonly gauge
 # TYPE kube_pod_start_time gauge
 # TYPE kube_pod_status_container_ready_time gauge
+# TYPE kube_pod_status_disruption_reason gauge
 # TYPE kube_pod_status_initialized_time gauge
 # TYPE kube_pod_status_phase gauge
 # TYPE kube_pod_status_qos_class gauge
@@ -359,18 +371,10 @@ kube_pod_status_phase{namespace="default",pod="pod0",uid="abc-0",phase="Pending"
 kube_pod_status_phase{namespace="default",pod="pod0",uid="abc-0",phase="Running"} 1
 kube_pod_status_phase{namespace="default",pod="pod0",uid="abc-0",phase="Succeeded"} 0
 kube_pod_status_phase{namespace="default",pod="pod0",uid="abc-0",phase="Unknown"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="Evicted"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="NodeAffinity"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="NodeLost"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="PreemptionByScheduler"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="SchedulingGated"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="Shutdown"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="TerminationByKubelet"} 0
-kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="UnexpectedAdmissionError"} 0
 `
 
 	expectedSplit := strings.Split(strings.TrimSpace(expected), "\n")
-	sort.Strings(expectedSplit)
+	slices.Sort(expectedSplit)
 
 	gotSplit := strings.Split(strings.TrimSpace(string(body)), "\n")
 
@@ -381,7 +385,7 @@ kube_pod_status_reason{namespace="default",pod="pod0",uid="abc-0",reason="Unexpe
 		}
 	}
 
-	sort.Strings(gotFiltered)
+	slices.Sort(gotFiltered)
 
 	if len(expectedSplit) != len(gotFiltered) {
 		fmt.Println(len(expectedSplit))
@@ -418,7 +422,7 @@ kube_state_metrics_total_shards 1
 `
 
 	expectedSplit2 := strings.Split(strings.TrimSpace(expected2), "\n")
-	sort.Strings(expectedSplit2)
+	slices.Sort(expectedSplit2)
 
 	gotSplit2 := strings.Split(strings.TrimSpace(string(body2)), "\n")
 
@@ -429,7 +433,7 @@ kube_state_metrics_total_shards 1
 		}
 	}
 
-	sort.Strings(gotFiltered2)
+	slices.Sort(gotFiltered2)
 
 	if len(expectedSplit2) != len(gotFiltered2) {
 		fmt.Println(len(expectedSplit2))
@@ -615,7 +619,7 @@ func TestShardingEquivalenceScrapeCycle(t *testing.T) {
 	// normalize results:
 
 	expectedSplit := strings.Split(strings.TrimSpace(expected), "\n")
-	sort.Strings(expectedSplit)
+	slices.Sort(expectedSplit)
 
 	expectedFiltered := []string{}
 	for _, l := range expectedSplit {
@@ -625,7 +629,7 @@ func TestShardingEquivalenceScrapeCycle(t *testing.T) {
 	}
 
 	got1Split := strings.Split(strings.TrimSpace(got1), "\n")
-	sort.Strings(got1Split)
+	slices.Sort(got1Split)
 
 	got1Filtered := []string{}
 	for _, l := range got1Split {
@@ -635,7 +639,7 @@ func TestShardingEquivalenceScrapeCycle(t *testing.T) {
 	}
 
 	got2Split := strings.Split(strings.TrimSpace(got2), "\n")
-	sort.Strings(got2Split)
+	slices.Sort(got2Split)
 
 	got2Filtered := []string{}
 	for _, l := range got2Split {
@@ -657,7 +661,7 @@ func TestShardingEquivalenceScrapeCycle(t *testing.T) {
 	}
 
 	got1Filtered = append(got1Filtered, got2Filtered...)
-	sort.Strings(got1Filtered)
+	slices.Sort(got1Filtered)
 
 	for i := 0; i < len(expectedFiltered); i++ {
 		expected := strings.TrimSpace(expectedFiltered[i])
@@ -761,7 +765,7 @@ kube_foo_status_replicas_available{namespace="default",foo="foo9"} 9
 `
 
 	expectedSplit := strings.Split(strings.TrimSpace(expected), "\n")
-	sort.Strings(expectedSplit)
+	slices.Sort(expectedSplit)
 
 	gotSplit := strings.Split(strings.TrimSpace(string(body)), "\n")
 
@@ -772,7 +776,7 @@ kube_foo_status_replicas_available{namespace="default",foo="foo9"} 9
 		}
 	}
 
-	sort.Strings(gotFiltered)
+	slices.Sort(gotFiltered)
 
 	if len(expectedSplit) != len(gotFiltered) {
 		fmt.Println(len(expectedSplit))
@@ -1039,6 +1043,70 @@ func (f *fooFactory) ListWatch(customResourceClient interface{}, ns string, fiel
 		},
 	}
 }
+
+func failingLandingPage(_ web.LandingConfig) (*web.LandingPageHandler, error) {
+	return nil, fmt.Errorf("injected landing page error")
+}
+
+func TestRegisterLandingPage(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	registerLandingPage(mux, web.LandingConfig{Name: "kube-state-metrics"}, web.NewLandingPage)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for landing page at /, got %d", w.Code)
+	}
+}
+
+// A failing factory returns a nil *web.LandingPageHandler. Registering that would
+// store a non-nil http.Handler holding a nil pointer, which panics on the first
+// request to "/", so nothing must be registered at all.
+func TestRegisterLandingPageError(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	registerLandingPage(mux, web.LandingConfig{Name: "kube-state-metrics"}, failingLandingPage)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for / when landing page creation fails, got %d", w.Code)
+	}
+}
+
+// The builders wire the landing page up for real, so "/" must be served.
+func TestBuildServersServeLandingPage(t *testing.T) {
+	t.Parallel()
+	kubeClient := fake.NewSimpleClientset()
+
+	durationVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:        "http_request_duration_seconds",
+		ConstLabels: prometheus.Labels{"handler": "metrics"},
+	}, []string{"method"})
+
+	builder := store.NewBuilder()
+	builder.WithMetrics(prometheus.NewRegistry())
+	handler := metricshandler.New(&options.Options{}, kubeClient, builder, false)
+
+	for name, mux := range map[string]*http.ServeMux{
+		"telemetry": buildTelemetryServer(prometheus.NewRegistry(), false, nil),
+		"metrics":   buildMetricsServer(handler, durationVec, kubeClient, false, nil),
+	} {
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("%s server: expected 200 for landing page at /, got %d", name, w.Code)
+		}
+	}
+}
+
 func TestConfigureResourcesAndMetrics(t *testing.T) {
 	// Prepare a config file in YAML format
 	configYAML := `
