@@ -17,9 +17,12 @@ limitations under the License.
 package sharding
 
 import (
+	"fmt"
 	"hash/fnv"
+	"sync"
 
 	jump "github.com/dgryski/go-jump"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,6 +33,79 @@ import (
 type shardedListWatch struct {
 	sharding *sharding
 	lw       cache.ListerWatcher
+}
+
+// shardedWatch filters events from an upstream watch while allowing Stop to
+// interrupt both receiving and forwarding. This is intentionally local to the
+// sharding implementation: once its consumer stops, an in-flight event may be
+// discarded so the forwarding goroutine can terminate promptly. This avoids
+// the blocked-send leak in watch.Filter documented in:
+// https://github.com/kubernetes/kubernetes/issues/113254.
+type shardedWatch struct {
+	incoming watch.Interface
+	result   chan watch.Event
+	filter   watch.FilterFunc
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	stopOnce sync.Once
+}
+
+var _ watch.Interface = &shardedWatch{}
+
+func newShardedWatch(incoming watch.Interface, filter watch.FilterFunc) *shardedWatch {
+	w := &shardedWatch{
+		incoming: incoming,
+		result:   make(chan watch.Event),
+		filter:   filter,
+		stopCh:   make(chan struct{}),
+		doneCh:   make(chan struct{}),
+	}
+	go w.run()
+	return w
+}
+
+// ResultChan returns the filtered event stream.
+func (w *shardedWatch) ResultChan() <-chan watch.Event {
+	return w.result
+}
+
+// Stop stops the upstream watch and unblocks the forwarding goroutine.
+func (w *shardedWatch) Stop() {
+	w.stopOnce.Do(func() {
+		// Close stopCh first so forwarding can stop independently of upstream
+		// watcher shutdown.
+		close(w.stopCh)
+		w.incoming.Stop()
+	})
+}
+
+func (w *shardedWatch) run() {
+	defer close(w.doneCh)
+	defer close(w.result)
+	defer w.Stop()
+
+	incoming := w.incoming.ResultChan()
+	for {
+		select {
+		case <-w.stopCh:
+			return
+		case event, ok := <-incoming:
+			if !ok {
+				return
+			}
+
+			filtered, keep := w.filter(event)
+			if !keep {
+				continue
+			}
+
+			select {
+			case <-w.stopCh:
+				return
+			case w.result <- filtered:
+			}
+		}
+	}
 }
 
 // NewShardedListWatch returns a new shardedListWatch via the cache.ListerWatcher interface.
@@ -49,7 +125,10 @@ func (s *shardedListWatch) List(options metav1.ListOptions) (runtime.Object, err
 	if err != nil {
 		return nil, err
 	}
-	items, err := meta.ExtractList(list)
+	// Shard items outlive the source list. ExtractListWithAlloc shallow-copies
+	// non-pointer items so retained objects cannot keep the source Items backing
+	// array reachable.
+	items, err := meta.ExtractListWithAlloc(list)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +149,11 @@ func (s *shardedListWatch) List(options metav1.ListOptions) (runtime.Object, err
 		}
 	}
 	res.ResourceVersion = metaObj.GetResourceVersion()
+	// The reflector pages through large lists. Dropping the continue token would
+	// end the pager after the first page and silently truncate the relist, so it
+	// has to survive the shard filtering along with the resource version.
+	res.Continue = metaObj.GetContinue()
+	res.RemainingItemCount = metaObj.GetRemainingItemCount()
 
 	return res, nil
 }
@@ -80,21 +164,32 @@ func (s *shardedListWatch) Watch(options metav1.ListOptions) (watch.Interface, e
 		return nil, err
 	}
 
-	return watch.Filter(w, func(in watch.Event) (out watch.Event, keep bool) {
-		// Bookmarks are stream control events. They carry a resource version but
-		// no UID, so filtering them would route every bookmark to a single shard.
-		if in.Type == watch.Bookmark {
-			return in, true
-		}
+	return newShardedWatch(w, s.filterWatchEvent), nil
+}
 
+// filterWatchEvent shards resource state changes, passes control events through,
+// and rejects unknown events so new mutation types cannot bypass sharding.
+func (s *shardedListWatch) filterWatchEvent(in watch.Event) (out watch.Event, keep bool) {
+	switch in.Type {
+	case watch.Added, watch.Modified, watch.Deleted:
 		a, err := meta.Accessor(in.Object)
 		if err != nil {
-			// TODO(brancz): needs logging
-			return in, true
+			return internalErrorEvent(fmt.Errorf("sharded list watch failed to access object metadata for event type %q: %w", in.Type, err)), true
 		}
 
 		return in, s.sharding.keep(a)
-	}), nil
+	case watch.Bookmark, watch.Error:
+		return in, true
+	default:
+		return internalErrorEvent(fmt.Errorf("sharded list watch failed to recognize event type %q", in.Type)), true
+	}
+}
+
+func internalErrorEvent(err error) watch.Event {
+	return watch.Event{
+		Type:   watch.Error,
+		Object: &apierrors.NewInternalError(err).ErrStatus,
+	}
 }
 
 // IsWatchListSemanticsUnSupported delegates to the underlying ListerWatcher if it implements this interface.

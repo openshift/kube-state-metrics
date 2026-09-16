@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	regexp "github.com/dlclark/regexp2"
+	regexp "github.com/dlclark/regexp2/v2"
 )
 
 func TestNew(t *testing.T) {
@@ -63,6 +63,24 @@ func TestNew(t *testing.T) {
 
 		if list.isAllowList {
 			t.Fatal("expected list to be denylist")
+		}
+	})
+
+	// The list is mutated by Include and Exclude, so New must return a writable
+	// map even when both inputs are nil.
+	t.Run("nil inputs produce a writable list", func(t *testing.T) {
+		list, err := New(nil, nil)
+		if err != nil {
+			t.Fatal("expected New() to not fail")
+		}
+
+		if list.list == nil {
+			t.Fatal("expected list to be non-nil")
+		}
+
+		list.Exclude([]string{"item1"})
+		if _, ok := list.list["item1"]; !ok {
+			t.Fatal("expected Exclude() to add item1 to the denylist")
 		}
 	})
 }
@@ -294,7 +312,7 @@ func TestStatus(t *testing.T) {
 }
 
 func TestCatastrophicBacktrackTimeout(t *testing.T) {
-	r, err := regexp.Compile("(.+)*\\?", 0)
+	r, err := regexp.Compile("(.+)*\\?", regexp.None)
 	if err != nil {
 		t.Fatal(err)
 	}

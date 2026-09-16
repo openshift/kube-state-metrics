@@ -44,38 +44,44 @@ var (
 )
 
 func calculateNextSchedule6h(timestamp time.Time, timezone string) time.Time {
-	loc, _ := time.LoadLocation(timezone)
-	hour := timestamp.In(loc).Hour()
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		panic(err)
+	}
+	// Extract the date components in the target zone, not the machine's local
+	// zone, so the result is correct regardless of where the test runs.
+	ts := timestamp.In(loc)
+	hour := ts.Hour()
 	switch {
 	case hour < 6:
 		return time.Date(
-			timestamp.Year(),
-			timestamp.Month(),
-			timestamp.Day(),
+			ts.Year(),
+			ts.Month(),
+			ts.Day(),
 			6,
 			0,
 			0, 0, loc)
 	case hour < 12:
 		return time.Date(
-			timestamp.Year(),
-			timestamp.Month(),
-			timestamp.Day(),
+			ts.Year(),
+			ts.Month(),
+			ts.Day(),
 			12,
 			0,
 			0, 0, loc)
 	case hour < 18:
 		return time.Date(
-			timestamp.Year(),
-			timestamp.Month(),
-			timestamp.Day(),
+			ts.Year(),
+			ts.Month(),
+			ts.Day(),
 			18,
 			0,
 			0, 0, loc)
 	default:
 		return time.Date(
-			timestamp.Year(),
-			timestamp.Month(),
-			timestamp.Day()+1,
+			ts.Year(),
+			ts.Month(),
+			ts.Day()+1,
 			0,
 			0,
 			0, 0, loc)
@@ -83,27 +89,30 @@ func calculateNextSchedule6h(timestamp time.Time, timezone string) time.Time {
 }
 
 func calculateNextSchedule25m(timestamp time.Time, timezone string) time.Time {
-	loc, _ := time.LoadLocation(timezone)
-	minute := timestamp.In(loc).Minute()
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		panic(err)
+	}
+	ts := timestamp.In(loc)
+	minute := ts.Minute()
 	switch {
 	case minute < 25:
 		return time.Date(
-			timestamp.Year(),
-			timestamp.Month(),
-			timestamp.Day(),
-			timestamp.Hour(),
+			ts.Year(),
+			ts.Month(),
+			ts.Day(),
+			ts.Hour(),
 			25,
 			0, 0, loc)
 	default:
 		return time.Date(
-			timestamp.Year(),
-			timestamp.Month(),
-			timestamp.Day(),
-			timestamp.Hour()+1,
+			ts.Year(),
+			ts.Month(),
+			ts.Day(),
+			ts.Hour()+1,
 			25,
 			0, 0, loc)
 	}
-
 }
 func TestCronJobStore(t *testing.T) {
 
@@ -462,6 +471,68 @@ func TestCronJobStore(t *testing.T) {
 					float64(ActiveCronJob1NoLastScheduledNextScheduleTime.Unix())/math.Pow10(9)),
 			MetricNames: []string{"kube_cronjob_status_last_successful_time", "kube_cronjob_next_schedule_time", "kube_cronjob_spec_starting_deadline_seconds", "kube_cronjob_status_active", "kube_cronjob_metadata_resource_version", "kube_cronjob_spec_suspend", "kube_cronjob_info", "kube_cronjob_created", "kube_cronjob_labels", "kube_cronjob_spec_successful_job_history_limit", "kube_cronjob_spec_failed_job_history_limit"},
 		},
+		{
+			// Verify omitted suspend falls back to the API default.
+			Obj: &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "ActiveCronJobNilSuspend",
+					CreationTimestamp: metav1.Time{Time: ActiveCronJob1NoLastScheduledCreationTimestamp},
+					Namespace:         "ns1",
+					Generation:        1,
+					ResourceVersion:   "44444",
+					Labels: map[string]string{
+						"app": "example-active-nil-suspend",
+					},
+				},
+				Status: batchv1.CronJobStatus{
+					Active:             []v1.ObjectReference{},
+					LastScheduleTime:   nil,
+					LastSuccessfulTime: nil,
+				},
+				Spec: batchv1.CronJobSpec{
+					StartingDeadlineSeconds:    &StartingDeadlineSeconds300,
+					ConcurrencyPolicy:          "Forbid",
+					Schedule:                   "25 * * * *",
+					SuccessfulJobsHistoryLimit: &SuccessfulJobHistoryLimit3,
+					FailedJobsHistoryLimit:     &FailedJobHistoryLimit1,
+				},
+			},
+			Want: `
+				# HELP kube_cronjob_created [STABLE] Unix creation timestamp
+				# HELP kube_cronjob_info [STABLE] Info about cronjob.
+				# HELP kube_cronjob_labels [STABLE] Kubernetes labels converted to Prometheus labels.
+				# HELP kube_cronjob_next_schedule_time [STABLE] Next time the cronjob should be scheduled. The time after lastScheduleTime, or after the cron job's creation time if it's never been scheduled. Use this to determine if the job is delayed.
+				# HELP kube_cronjob_spec_failed_job_history_limit Failed job history limit tells the controller how many failed jobs should be preserved.
+				# HELP kube_cronjob_spec_starting_deadline_seconds [STABLE] Deadline in seconds for starting the job if it misses scheduled time for any reason.
+				# HELP kube_cronjob_spec_successful_job_history_limit Successful job history limit tells the controller how many completed jobs should be preserved.
+				# HELP kube_cronjob_spec_suspend [STABLE] Suspend flag tells the controller to suspend subsequent executions.
+				# HELP kube_cronjob_status_active [STABLE] Active holds pointers to currently running jobs.
+				# HELP kube_cronjob_status_last_successful_time [STABLE] LastSuccessfulTime keeps information of when was the last time the job was completed successfully.
+                # HELP kube_cronjob_metadata_resource_version [STABLE] Resource version representing a specific version of the cronjob.
+				# TYPE kube_cronjob_created gauge
+				# TYPE kube_cronjob_info gauge
+				# TYPE kube_cronjob_labels gauge
+				# TYPE kube_cronjob_next_schedule_time gauge
+				# TYPE kube_cronjob_spec_failed_job_history_limit gauge
+				# TYPE kube_cronjob_spec_starting_deadline_seconds gauge
+				# TYPE kube_cronjob_spec_successful_job_history_limit gauge
+				# TYPE kube_cronjob_spec_suspend gauge
+				# TYPE kube_cronjob_status_active gauge
+                		# TYPE kube_cronjob_metadata_resource_version gauge
+				# TYPE kube_cronjob_status_last_successful_time gauge
+				kube_cronjob_spec_starting_deadline_seconds{cronjob="ActiveCronJobNilSuspend",namespace="ns1"} 300
+				kube_cronjob_status_active{cronjob="ActiveCronJobNilSuspend",namespace="ns1"} 0
+				kube_cronjob_metadata_resource_version{cronjob="ActiveCronJobNilSuspend",namespace="ns1"} 44444
+				kube_cronjob_spec_failed_job_history_limit{cronjob="ActiveCronJobNilSuspend",namespace="ns1"} 1
+				kube_cronjob_spec_successful_job_history_limit{cronjob="ActiveCronJobNilSuspend",namespace="ns1"} 3
+				kube_cronjob_spec_suspend{cronjob="ActiveCronJobNilSuspend",namespace="ns1"} 0
+				kube_cronjob_info{concurrency_policy="Forbid",cronjob="ActiveCronJobNilSuspend",namespace="ns1",schedule="25 * * * *",timezone="local"} 1
+				kube_cronjob_created{cronjob="ActiveCronJobNilSuspend",namespace="ns1"} 1.520766296e+09
+` +
+				fmt.Sprintf("kube_cronjob_next_schedule_time{cronjob=\"ActiveCronJobNilSuspend\",namespace=\"ns1\"} %ve+09\n",
+					float64(ActiveCronJob1NoLastScheduledNextScheduleTime.Unix())/math.Pow10(9)),
+			MetricNames: []string{"kube_cronjob_status_last_successful_time", "kube_cronjob_next_schedule_time", "kube_cronjob_spec_starting_deadline_seconds", "kube_cronjob_status_active", "kube_cronjob_metadata_resource_version", "kube_cronjob_spec_suspend", "kube_cronjob_info", "kube_cronjob_created", "kube_cronjob_labels", "kube_cronjob_spec_successful_job_history_limit", "kube_cronjob_spec_failed_job_history_limit"},
+		},
 	}
 	for i, c := range cases {
 		c.Func = generator.ComposeMetricGenFuncs(cronJobMetricFamilies(c.AllowAnnotationsList, c.AllowLabelsList))
@@ -524,6 +595,12 @@ func TestCronJobStoreScheduleParsing(t *testing.T) {
 
 	// next schedule time for a valid "0 */6 * * *" schedule relative to LastScheduleTime.
 	validNextScheduleTime := calculateNextSchedule6h(ActiveRunningCronJob1LastScheduleTime, "Local")
+
+	// next schedule time for the same schedule evaluated in a valid named time zone.
+	// This is the scenario from issue #2898: resolving "Asia/Singapore" requires the
+	// IANA tz database, which internal/store/cronjob.go embeds via `_ "time/tzdata"` so that named zones
+	// resolve even on minimal/distroless images that ship no tzdata.
+	namedTZNextScheduleTime := calculateNextSchedule6h(ActiveRunningCronJob1LastScheduleTime, "Asia/Singapore")
 
 	cases := []generateMetricsTestCase{
 		{
@@ -589,6 +666,29 @@ func TestCronJobStoreScheduleParsing(t *testing.T) {
 				# TYPE kube_cronjob_schedule_invalid gauge
 				kube_cronjob_schedule_invalid{cronjob="InvalidTimeZoneCronJob",namespace="ns1"} 1
 `,
+			MetricNames: []string{"kube_cronjob_next_schedule_time", "kube_cronjob_schedule_invalid", "kube_cronjob_status_last_schedule_time"},
+		},
+		{
+			// Valid named time zone (regression for issue #2898): next_schedule_time is
+			// emitted, computed in that zone, and schedule_invalid is not. Before tzdata
+			// was embedded into the binary, a distroless image could not resolve
+			// "Asia/Singapore" and KSM wrongly flagged the schedule as invalid.
+			Obj: func() *batchv1.CronJob {
+				cj := newCronJob("NamedTimeZoneCronJob", "0 */6 * * *")
+				namedTimeZone := "Asia/Singapore"
+				cj.Spec.TimeZone = &namedTimeZone
+				return cj
+			}(),
+			Want: `
+				# HELP kube_cronjob_schedule_invalid Emitted with value 1 for cronjobs whose schedule, in its configured timezone, cannot be parsed.
+				# TYPE kube_cronjob_schedule_invalid gauge
+				# HELP kube_cronjob_status_last_schedule_time [STABLE] LastScheduleTime keeps information of when was the last time the job was successfully scheduled.
+				# TYPE kube_cronjob_status_last_schedule_time gauge
+				kube_cronjob_status_last_schedule_time{cronjob="NamedTimeZoneCronJob",namespace="ns1"} 1.520742896e+09
+				# HELP kube_cronjob_next_schedule_time [STABLE] Next time the cronjob should be scheduled. The time after lastScheduleTime, or after the cron job's creation time if it's never been scheduled. Use this to determine if the job is delayed.
+				# TYPE kube_cronjob_next_schedule_time gauge
+` + fmt.Sprintf("kube_cronjob_next_schedule_time{cronjob=\"NamedTimeZoneCronJob\",namespace=\"ns1\"} %ve+09\n",
+				float64(namedTZNextScheduleTime.Unix())/math.Pow10(9)),
 			MetricNames: []string{"kube_cronjob_next_schedule_time", "kube_cronjob_schedule_invalid", "kube_cronjob_status_last_schedule_time"},
 		},
 	}

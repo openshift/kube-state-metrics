@@ -22,6 +22,11 @@ import (
 	"fmt"
 	"time"
 
+	// Embed the IANA time zone database into the binary so that named time
+	// zones (e.g. a CronJob's spec.timeZone of "Asia/Singapore") resolve even
+	// when running from a minimal/distroless image that ships no tzdata.
+	_ "time/tzdata"
+
 	cron "github.com/netresearch/go-cron"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -201,18 +206,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			basemetrics.STABLE,
 			"",
 			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
-				ms := []*metric.Metric{}
-
-				if j.Spec.Suspend != nil {
-					ms = append(ms, &metric.Metric{
-						LabelKeys:   []string{},
-						LabelValues: []string{},
-						Value:       boolFloat64(*j.Spec.Suspend),
-					})
-				}
-
 				return &metric.Family{
-					Metrics: ms,
+					Metrics: []*metric.Metric{
+						{
+							LabelKeys:   []string{},
+							LabelValues: []string{},
+							Value:       boolFloat64(j.Spec.Suspend != nil && *j.Spec.Suspend),
+						},
+					},
 				}
 			}),
 		),

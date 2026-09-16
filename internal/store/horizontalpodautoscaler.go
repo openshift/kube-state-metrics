@@ -60,6 +60,8 @@ func hpaMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generat
 		createHPASpecMaxReplicas(),
 		createHPASpecMinReplicas(),
 		createHPASpecTargetMetric(),
+		createHPASpecBehaviorScaleDownTolerance(),
+		createHPASpecBehaviorScaleUpTolerance(),
 		createHPAStatusTargetMetric(),
 		createHPAStatusCurrentReplicas(),
 		createHPAStatusDesiredReplicas(),
@@ -171,10 +173,15 @@ func createHPASpecMinReplicas() generator.FamilyGenerator {
 		basemetrics.STABLE,
 		"",
 		wrapHPAFunc(func(a *autoscaling.HorizontalPodAutoscaler) *metric.Family {
+			minReplicas := float64(1)
+			if a.Spec.MinReplicas != nil {
+				minReplicas = float64(*a.Spec.MinReplicas)
+			}
+
 			return &metric.Family{
 				Metrics: []*metric.Metric{
 					{
-						Value: float64(*a.Spec.MinReplicas),
+						Value: minReplicas,
 					},
 				},
 			}
@@ -259,21 +266,40 @@ func createHPAStatusTargetMetric() generator.FamilyGenerator {
 				// The variable maps the type of metric to the corresponding value
 				metricMap := make(map[metricTargetType]float64)
 
+				// Unlike spec.metrics, status.currentMetrics is not validated:
+				// ValidateHorizontalPodAutoscalerStatusUpdate checks only the
+				// replica counts and the conditions, so the source matching Type
+				// may be absent. Skip such an entry rather than dereferencing it.
 				switch m.Type {
 				case autoscaling.ObjectMetricSourceType:
+					if m.Object == nil {
+						continue
+					}
 					metricName = m.Object.Metric.Name
 					currentMetric = m.Object.Current
 				case autoscaling.PodsMetricSourceType:
+					if m.Pods == nil {
+						continue
+					}
 					metricName = m.Pods.Metric.Name
 					currentMetric = m.Pods.Current
 				case autoscaling.ResourceMetricSourceType:
+					if m.Resource == nil {
+						continue
+					}
 					metricName = string(m.Resource.Name)
 					currentMetric = m.Resource.Current
 				case autoscaling.ContainerResourceMetricSourceType:
+					if m.ContainerResource == nil {
+						continue
+					}
 					metricName = string(m.ContainerResource.Name)
 					currentMetric = m.ContainerResource.Current
 					containerName = m.ContainerResource.Container
 				case autoscaling.ExternalMetricSourceType:
+					if m.External == nil {
+						continue
+					}
 					metricName = m.External.Metric.Name
 					currentMetric = m.External.Current
 				default:
@@ -456,6 +482,52 @@ func createHPADeletionTimestamp() generator.FamilyGenerator {
 			if !a.DeletionTimestamp.IsZero() {
 				ms = append(ms, &metric.Metric{
 					Value: float64(a.DeletionTimestamp.Unix()),
+				})
+			}
+
+			return &metric.Family{
+				Metrics: ms,
+			}
+		}),
+	)
+}
+
+func createHPASpecBehaviorScaleUpTolerance() generator.FamilyGenerator {
+	return *generator.NewFamilyGeneratorWithStability(
+		"kube_horizontalpodautoscaler_spec_behavior_scale_up_tolerance",
+		"The tolerance on the ratio between the current and desired metric value below which no scale up occurs.",
+		metric.Gauge,
+		basemetrics.ALPHA,
+		"",
+		wrapHPAFunc(func(a *autoscaling.HorizontalPodAutoscaler) *metric.Family {
+			ms := []*metric.Metric{}
+
+			if b := a.Spec.Behavior; b != nil && b.ScaleUp != nil && b.ScaleUp.Tolerance != nil {
+				ms = append(ms, &metric.Metric{
+					Value: b.ScaleUp.Tolerance.AsApproximateFloat64(),
+				})
+			}
+
+			return &metric.Family{
+				Metrics: ms,
+			}
+		}),
+	)
+}
+
+func createHPASpecBehaviorScaleDownTolerance() generator.FamilyGenerator {
+	return *generator.NewFamilyGeneratorWithStability(
+		"kube_horizontalpodautoscaler_spec_behavior_scale_down_tolerance",
+		"The tolerance on the ratio between the current and desired metric value below which no scale down occurs.",
+		metric.Gauge,
+		basemetrics.ALPHA,
+		"",
+		wrapHPAFunc(func(a *autoscaling.HorizontalPodAutoscaler) *metric.Family {
+			ms := []*metric.Metric{}
+
+			if b := a.Spec.Behavior; b != nil && b.ScaleDown != nil && b.ScaleDown.Tolerance != nil {
+				ms = append(ms, &metric.Metric{
+					Value: b.ScaleDown.Tolerance.AsApproximateFloat64(),
 				})
 			}
 

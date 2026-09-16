@@ -41,6 +41,7 @@ are deleted they are no longer visible on the `/metrics` endpoint.
   * [Resource group version compatibility](#resource-group-version-compatibility)
   * [Container Image](#container-image)
 * [Metrics Documentation](#metrics-documentation)
+  * [Custom Resource State Metrics](#custom-resource-state-metrics)
   * [ECMAScript regular expression support for allow and deny lists](#ecmascript-regular-expression-support-for-allow-and-deny-lists)
   * [Conflict resolution in label names](#conflict-resolution-in-label-names)
 * [Kube-state-metrics self metrics](#kube-state-metrics-self-metrics)
@@ -80,12 +81,12 @@ Generally, it is recommended to use the latest release of kube-state-metrics. If
 
 | kube-state-metrics | Kubernetes client-go Version |
 |--------------------|:----------------------------:|
-| **v2.15.0**        | v1.32                        |
 | **v2.16.0**        | v1.32                        |
 | **v2.17.0**        | v1.33                        |
 | **v2.18.0**        | v1.34                        |
 | **v2.19.0**        | v1.35                        |
-| **main**           | v1.35                        |
+| **v2.20.0**        | v1.36                        |
+| **main**           | v1.36                        |
 
 #### Resource group version compatibility
 
@@ -97,8 +98,8 @@ release.
 
 The latest container image can be found at:
 
-* `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0` (arch: `amd64`, `arm`, `arm64`, `ppc64le` and `s390x`)
-* [Multi-architecture images](https://explore.ggcr.dev/?image=registry.k8s.io%2Fkube-state-metrics%2Fkube-state-metrics:v2.19.0)
+* `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0` (arch: `amd64`, `arm`, `arm64`, `ppc64le` and `s390x`)
+* [Multi-architecture images](https://explore.ggcr.dev/?image=registry.k8s.io%2Fkube-state-metrics%2Fkube-state-metrics:v2.20.0)
 
 ### Metrics Documentation
 
@@ -106,6 +107,11 @@ Any resources and metrics based on alpha Kubernetes APIs are excluded from any s
 which may be changed at any given release.
 
 See the [`docs`](docs) directory for more information on the exposed metrics.
+
+#### Custom Resource State Metrics
+
+> [!NOTE]
+> `custom-resource-state` is feature-frozen in favor of [resource-state-metrics](https://github.com/kubernetes-sigs/resource-state-metrics). Once `resource-state-metrics` is stable, `custom-resource-state` will be deprecated.
 
 #### Conflict resolution in label names
 

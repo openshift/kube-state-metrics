@@ -271,12 +271,16 @@ func deploymentMetricFamilies(allowAnnotationsList, allowLabelsList []string) []
 			basemetrics.STABLE,
 			"",
 			wrapDeploymentFunc(func(d *v1.Deployment) *metric.Family {
+				ms := []*metric.Metric{}
+
+				if d.Spec.Replicas != nil {
+					ms = append(ms, &metric.Metric{
+						Value: float64(*d.Spec.Replicas),
+					})
+				}
+
 				return &metric.Family{
-					Metrics: []*metric.Metric{
-						{
-							Value: float64(*d.Spec.Replicas),
-						},
-					},
+					Metrics: ms,
 				}
 			}),
 		),
@@ -303,13 +307,17 @@ func deploymentMetricFamilies(allowAnnotationsList, allowLabelsList []string) []
 			basemetrics.STABLE,
 			"",
 			wrapDeploymentFunc(func(d *v1.Deployment) *metric.Family {
-				if d.Spec.Strategy.RollingUpdate == nil {
+				if d.Spec.Strategy.RollingUpdate == nil || d.Spec.Replicas == nil {
 					return &metric.Family{}
 				}
 
+				// GetScaledValueFromIntOrPercent also fails on a nil
+				// MaxUnavailable and on a percentage that does not parse, neither
+				// of which the guard above covers. A single such Deployment must
+				// not crash the exporter, so skip its metric instead.
 				maxUnavailable, err := intstr.GetScaledValueFromIntOrPercent(d.Spec.Strategy.RollingUpdate.MaxUnavailable, int(*d.Spec.Replicas), false)
 				if err != nil {
-					panic(err)
+					return &metric.Family{}
 				}
 
 				return &metric.Family{
@@ -328,13 +336,15 @@ func deploymentMetricFamilies(allowAnnotationsList, allowLabelsList []string) []
 			basemetrics.STABLE,
 			"",
 			wrapDeploymentFunc(func(d *v1.Deployment) *metric.Family {
-				if d.Spec.Strategy.RollingUpdate == nil {
+				if d.Spec.Strategy.RollingUpdate == nil || d.Spec.Replicas == nil {
 					return &metric.Family{}
 				}
 
+				// As above: a nil MaxSurge or an unparseable percentage is an
+				// error here, not a panic-worthy invariant violation.
 				maxSurge, err := intstr.GetScaledValueFromIntOrPercent(d.Spec.Strategy.RollingUpdate.MaxSurge, int(*d.Spec.Replicas), true)
 				if err != nil {
-					panic(err)
+					return &metric.Family{}
 				}
 
 				return &metric.Family{

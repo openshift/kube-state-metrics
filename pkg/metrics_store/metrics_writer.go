@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/prometheus/common/expfmt"
 
@@ -39,6 +40,12 @@ var (
 	// Pre-computing it reduces rewriteTypeLine to a 2-string concat (concatstring2),
 	// avoiding the overhead of a 3-string concat (concatstring3) on every rewrite.
 	gaugeNewline = gaugeTypeString + "\n"
+
+	seenPool = sync.Pool{
+		New: func() interface{} {
+			return make(map[string]struct{})
+		},
+	}
 )
 
 // MetricsWriterList represent a list of MetricsWriter
@@ -73,28 +80,41 @@ func (m MetricsWriter) WriteAll(w io.Writer) error {
 		return nil
 	}
 
+	// Headers describe the families written below, so they are emitted only when
+	// there is at least one object to describe. That has to consider every store,
+	// not just the first: there is one store per namespace, so the first can be
+	// empty while a later one holds objects whose families are still written.
+	// The answer is the same for every header, so determine it once.
+	hasMetrics := false
+	for _, s := range m.stores {
+		s.metrics.Range(func(_ interface{}, _ interface{}) bool {
+			hasMetrics = true
+			return false
+		})
+		if hasMetrics {
+			break
+		}
+	}
+
 	for i, help := range m.stores[0].headers {
 		var err error
 
 		// SanitizeHeaders blanks duplicate headers to preserve header/family
 		// index alignment. An empty header means suppress the header text but
 		// still emit the metric family bytes at this index.
-		if help != "" {
+		if help != "" && hasMetrics {
 			// Avoid allocating a new string if the header lacks a trailing newline:
 			// check once and emit "\n" as a second write if needed.
 			needsNewline := help[len(help)-1] != '\n'
-			m.stores[0].metrics.Range(func(_ interface{}, _ interface{}) bool {
-				_, err = io.WriteString(w, help)
-				if err != nil {
-					return false
-				}
-				if needsNewline {
-					_, err = io.WriteString(w, "\n")
-				}
-				return false
-			})
+			_, err = io.WriteString(w, help)
 			if err != nil {
-				return fmt.Errorf("failed to write help text: %v", err)
+				return fmt.Errorf("failed to write help text: %w", err)
+			}
+			if needsNewline {
+				_, err = io.WriteString(w, "\n")
+				if err != nil {
+					return fmt.Errorf("failed to write help text: %w", err)
+				}
 			}
 		}
 
@@ -103,7 +123,7 @@ func (m MetricsWriter) WriteAll(w io.Writer) error {
 				metricFamilies := value.([][]byte)
 				_, err = w.Write(metricFamilies[i])
 				if err != nil {
-					err = fmt.Errorf("failed to write metrics family: %v", err)
+					err = fmt.Errorf("failed to write metrics family: %w", err)
 					return false
 				}
 				return true
@@ -116,39 +136,34 @@ func (m MetricsWriter) WriteAll(w io.Writer) error {
 	return nil
 }
 
-// scanHeader inspects a header string and returns deduplication/modification metadata.
-// It does not mutate seen — callers must update that map themselves.
-// Headers are expected to have the form "# HELP <name> <desc>\n# TYPE <name> <type>\n".
-// typeLastSpace is the byte offset of the space before the type suffix in header, or -1.
-func scanHeader(header string, seen map[string]struct{}, isTextPlain bool) (shouldRemove, needsModification bool, metricName string, typeLastSpace int) {
+// parseHeaderStatic parses and potentially rewrites a header string.
+// It returns the extracted metricName (if any) and the normalized/rewritten header string.
+func parseHeaderStatic(header string, isTextPlain bool) (metricName string, rewrittenHeader string) {
 	rest := header
-	typeLastSpace = -1
-
 	// Parse HELP line.
 	if len(rest) > len(helpPrefix) && rest[:len(helpPrefix)] == helpPrefix {
 		rest = rest[len(helpPrefix):]
 		if spaceIdx := strings.IndexByte(rest, ' '); spaceIdx > 0 {
 			metricName = rest[:spaceIdx]
-			if _, isSeen := seen[metricName]; isSeen {
-				return true, false, metricName, -1
-			}
 		}
 		// Advance past the rest of the HELP line.
 		nl := strings.IndexByte(rest, '\n')
 		if nl == -1 {
-			return false, false, metricName, -1
+			rewrittenHeader = header
+			if len(rewrittenHeader) > 0 && rewrittenHeader[len(rewrittenHeader)-1] != '\n' {
+				rewrittenHeader += "\n"
+			}
+			return metricName, rewrittenHeader
 		}
 		rest = rest[nl+1:]
 	}
 
+	needsModification := false
+	typeLastSpace := -1
 	// Parse TYPE line.
 	if len(rest) > len(typePrefix) && rest[:len(typePrefix)] == typePrefix {
 		rest = rest[len(typePrefix):]
 		if spaceIdx := strings.IndexByte(rest, ' '); spaceIdx > 0 {
-			typeName := rest[:spaceIdx]
-			if _, isSeen := seen[typeName]; isSeen {
-				return true, false, metricName, -1
-			}
 			// Record the position of the space before the type suffix within the
 			// original header string so rewriteTypeLine can avoid recomputing it.
 			typeLastSpace = len(header) - len(rest) + spaceIdx
@@ -162,7 +177,21 @@ func scanHeader(header string, seen map[string]struct{}, isTextPlain bool) (shou
 		}
 	}
 
-	return false, needsModification, metricName, typeLastSpace
+	if !needsModification {
+		rewrittenHeader = header
+	} else {
+		if rewritten := rewriteTypeLine(header, typeLastSpace); rewritten != "" {
+			rewrittenHeader = rewritten
+		} else {
+			rewrittenHeader = header
+		}
+	}
+
+	if len(rewrittenHeader) > 0 && rewrittenHeader[len(rewrittenHeader)-1] != '\n' {
+		rewrittenHeader += "\n"
+	}
+
+	return metricName, rewrittenHeader
 }
 
 // rewriteTypeLine replaces an OpenMetrics-only type suffix (info/stateset) with "gauge"
@@ -177,29 +206,31 @@ func rewriteTypeLine(header string, lastSpace int) string {
 
 // SanitizeHeaders sanitizes the headers of the given MetricsWriterList.
 func SanitizeHeaders(contentType expfmt.Format, writers MetricsWriterList) MetricsWriterList {
-	// Pre-count total headers to size the seen map accurately upfront.
-	capHint := 0
-	for _, writer := range writers {
-		if len(writer.stores) > 0 {
-			capHint += len(writer.stores[0].headers)
-		}
-	}
-
 	isTextPlain := contentType.FormatType() == expfmt.TypeTextPlain
 	// A single map replaces the former seenHELP+seenTYPE pair: HELP and TYPE lines
 	// always share the same metric name, so one lookup per header suffices.
-	seen := make(map[string]struct{}, capHint)
+	seen := seenPool.Get().(map[string]struct{})
+	defer func() {
+		clear(seen)
+		seenPool.Put(seen)
+	}()
 
 	clonedWriters := make(MetricsWriterList, 0, len(writers))
 	for _, writer := range writers {
 		clonedStores := make([]*MetricsStore, 0, len(writer.stores))
 		for i, store := range writer.stores {
 			clonedStore := &MetricsStore{
-				metrics: store.metrics,
+				metrics:               store.metrics,
+				lastResourceVersion:   store.lastResourceVersion,
+				lastResourceVersionMu: store.lastResourceVersionMu,
 			}
 			if i == 0 {
 				clonedHeaders := make([]string, len(store.headers))
-				copy(clonedHeaders, store.headers)
+				if isTextPlain {
+					copy(clonedHeaders, store.headersTextPlain)
+				} else {
+					copy(clonedHeaders, store.headersOpenMetrics)
+				}
 				clonedStore.headers = clonedHeaders
 			}
 			clonedStores = append(clonedStores, clonedStore)
@@ -208,34 +239,17 @@ func SanitizeHeaders(contentType expfmt.Format, writers MetricsWriterList) Metri
 		// Deduplicate and rewrite headers on the cloned store in the same pass.
 		if len(clonedStores) > 0 {
 			headers := clonedStores[0].headers
-			for i, header := range headers {
-				if header == "" {
+			metricNames := writer.stores[0].metricNames
+			for i, mName := range metricNames {
+				if headers[i] == "" {
 					continue
 				}
-
-				shouldRemove, needsModification, metricName, lastSpace := scanHeader(header, seen, isTextPlain)
-
-				if shouldRemove {
-					headers[i] = ""
-					continue
-				}
-
-				if metricName != "" {
-					seen[metricName] = struct{}{}
-				}
-
-				if !needsModification {
-					if header[len(header)-1] != '\n' {
-						headers[i] = header + "\n"
+				if mName != "" {
+					if _, isSeen := seen[mName]; isSeen {
+						headers[i] = ""
+						continue
 					}
-					continue
-				}
-
-				// Surgical replacement: only modify the TYPE line suffix.
-				if rewritten := rewriteTypeLine(header, lastSpace); rewritten != "" {
-					headers[i] = rewritten
-				} else if header[len(header)-1] != '\n' {
-					headers[i] = header + "\n"
+					seen[mName] = struct{}{}
 				}
 			}
 		}
