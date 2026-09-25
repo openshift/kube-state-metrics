@@ -3,6 +3,7 @@ component: "Monitoring"
 
 reviewers:
   - simonpasquier
+  - dgrisonnet
   - jan--f
   - slashpai
   - danielmellado
@@ -11,6 +12,7 @@ reviewers:
 
 approvers:
   - simonpasquier
+  - dgrisonnet
   - jan--f
   - slashpai
   - danielmellado
@@ -30,6 +32,5 @@ emeritus_approvers:
   - JoaoBraveCoding
   - sthaha
   - juanrh
-  - dgrisonnet
   - raptorsun
   - rexagod
