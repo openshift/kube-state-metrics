@@ -4,22 +4,20 @@ component: "Monitoring"
 reviewers:
   - simonpasquier
   - dgrisonnet
-  - slashpai
-  - sthaha
-  - raptorsun
   - jan--f
-  - JoaoBraveCoding
-  - juanrh
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 
 approvers:
   - simonpasquier
   - dgrisonnet
-  - slashpai
-  - sthaha
-  - raptorsun
   - jan--f
-  - JoaoBraveCoding
-  - juanrh
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 
 
 emeritus_approvers:
@@ -32,3 +30,7 @@ emeritus_approvers:
   - fpetkovski
   - PhilipGough
   - arajkumar
+  - sthaha
+  - raptorsun
+  - JoaoBraveCoding
+  - juanrh
