@@ -1,9 +1,20 @@
 reviewers:
-  - brancz
-  - paulfantom
-  - LiliC
-  - s-urbaniak
+  - simonpasquier
+  - dgrisonnet
+  - jan--f
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 approvers:
+  - simonpasquier
+  - dgrisonnet
+  - jan--f
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
+emeritus_approvers:
   - brancz
   - paulfantom
   - LiliC
