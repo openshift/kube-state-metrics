@@ -1,7 +1,20 @@
 reviewers:
-  - brancz
-  - andyxning
+  - simonpasquier
+  - dgrisonnet
+  - jan--f
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 approvers:
+  - simonpasquier
+  - dgrisonnet
+  - jan--f
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
+emeritus_approvers:
   - brancz
   - andyxning
   - fabxc
