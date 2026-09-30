@@ -2,36 +2,32 @@
 component: "Monitoring"
 
 reviewers:
-  - paulfantom
   - simonpasquier
   - dgrisonnet
-  - kakkoyun
-  - slashpai
-  - prashbnair
-  - arajkumar
-  - sthaha
-  - PhilipGough
-  - bison
-  - fpetkovski
-  - raptorsun
   - jan--f
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 
 approvers:
-  - paulfantom
   - simonpasquier
   - dgrisonnet
-  - kakkoyun
-  - slashpai
-  - prashbnair
-  - arajkumar
-  - sthaha
-  - PhilipGough
-  - bison
-  - fpetkovski
-  - raptorsun
   - jan--f
-  
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 
 emeritus_approvers:
   - brancz
   - s-urbaniak
+  - paulfantom
+  - kakkoyun
+  - prashbnair
+  - arajkumar
+  - sthaha
+  - PhilipGough
+  - bison
+  - fpetkovski
+  - raptorsun
