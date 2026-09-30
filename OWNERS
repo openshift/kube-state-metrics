@@ -2,18 +2,25 @@
 component: "Monitoring"
 
 reviewers:
-  - paulfantom
-  - s-urbaniak
   - simonpasquier
   - dgrisonnet
-  - kakkoyun
+  - jan--f
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 
 approvers:
-  - paulfantom
-  - s-urbaniak
   - simonpasquier
   - dgrisonnet
-  - kakkoyun
+  - jan--f
+  - slashpai
+  - danielmellado
+  - marioferh
+  - machine424
 
 emeritus_approvers:
   - brancz
+  - paulfantom
+  - s-urbaniak
+  - kakkoyun
