@@ -1,0 +1,216 @@
+name: continuous-integration
+
+on:
+  push:
+    branches:
+    - main
+    - release*
+    tags:
+    - v1.*
+    - v2.*
+  pull_request:
+    branches:
+    - main
+    - release*
+
+permissions:
+  contents: read
+
+env:
+  E2E_SETUP_KIND: yes
+  E2E_SETUP_KUBECTL: yes
+  SUDO: sudo
+  GO_VERSION: "1.25.6"
+  GOLANGCI_LINT_VERSION: "v2.8.0"
+
+jobs:
+  ci-go-lint:
+    name: ci-go-lint
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Lint
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${{ env.GOLANGCI_LINT_VERSION }}
+        make lint
+
+  ci-validate-manifests:
+    name: ci-validate-manifests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Validate generated manifests
+      run: |
+        make validate-manifests
+
+  ci-validate-go-modules:
+    name: ci-validate-go-modules
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Validate go modules
+      run: |
+        make validate-modules
+
+  ci-validate-docs:
+    name: ci-validate-docs
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Check that all metrics are documented and templates have no delta
+      run: |
+        make doccheck
+
+  ci-unit-tests:
+    name: ci-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Unit tests
+      run: |
+        make test-unit
+
+  ci-rule-tests:
+    name: ci-rule-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Setup promtool
+        run: |
+          make install-promtool
+
+      - name: Rule tests
+        run: |
+          PROMTOOL_CLI=./promtool make test-rules
+
+  ci-benchmark-tests:
+    name: ci-benchmark-tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Benchmark tests
+      run: |
+        BENCHSTAT_OUTPUT_FILE=result.txt make test-benchmark-compare-main
+    - run: |
+        echo "Comparison against main branch" >> "$GITHUB_STEP_SUMMARY"
+        echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+        cat result.txt >> "$GITHUB_STEP_SUMMARY"
+        echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+        cat <<EOL >> "$GITHUB_STEP_SUMMARY"
+        <hr />
+        The table shows the median and 95% confidence interval (CI) summaries for each benchmark comparing the HEAD and the BASE, and an A/B comparison under "vs base". The last column shows the statistical p-value with ten runs (n=10).
+        The last row has the Geometric Mean (geomean) for the given rows in the table.
+        Refer to <a href="https://pkg.go.dev/golang.org/x/perf/cmd/benchstat">benchstat's documentation</a> for more help.
+        EOL
+
+  ci-benchmark-tests-release:
+    name: ci-benchmark-tests-releasebranch
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Benchmark tests
+      run: |
+        BENCHSTAT_OUTPUT_FILE=result.txt make test-benchmark-compare-release
+    - run: |
+        echo "Comparison against release branch" >> "$GITHUB_STEP_SUMMARY"
+        echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+        cat result.txt >> "$GITHUB_STEP_SUMMARY"
+        echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+        cat <<EOL >> "$GITHUB_STEP_SUMMARY"
+        <hr />
+        The table shows the median and 95% confidence interval (CI) summaries for each benchmark comparing the HEAD and the BASE, and an A/B comparison under "vs base". The last column shows the statistical p-value with ten runs (n=10).
+        The last row has the Geometric Mean (geomean) for the given rows in the table.
+        Refer to <a href="https://pkg.go.dev/golang.org/x/perf/cmd/benchstat">benchstat's documentation</a> for more help.
+        EOL
+
+  ci-build-kube-state-metrics:
+    name: ci-build-kube-state-metrics
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: Build
+      run: |
+        make build
+
+  ci-e2e-tests:
+    name: ci-e2e-tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      with:
+        go-version: ${{ env.GO_VERSION }}
+      id: go
+
+    - name: End-to-end tests
+      run: |
+        make e2e

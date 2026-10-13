@@ -1,0 +1,60 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - promlinter
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - promlinter
+        path: _test\.go
+      - linters:
+          - gosec
+        text: 'G104:'
+      - linters:
+          - revive
+        text: 'package-comments:|var-naming:'
+      # This needs to stay as long as we support exposing v1.endpoints metrics
+      - linters:
+          - staticcheck
+        text: 'SA1019: v1.Endpoint'
+        path: 'internal/store/endpoint.*.go|internal/store/builder.go'
+      # TODO: Use functions with context https://github.com/kubernetes/kube-state-metrics/issues/2721
+      - linters:
+          - staticcheck
+        text: 'SA1019: .*List|Watch'
+        path: 'pkg/sharding/listwatch.go|pkg/watch/watch.go'
+
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - k8s.io/kube-state-metrics
+        - k8s.io/kube-state-metrics/v2
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
